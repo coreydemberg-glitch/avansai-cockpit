@@ -1,5 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+export async function HEAD() {
+  return new NextResponse(null, { status: 200 });
+}
+
+export async function GET() {
+  return new NextResponse(null, { status: 200 });
+}
+
 export async function POST(req: NextRequest) {
   const body = await req.json();
 
@@ -7,7 +15,6 @@ export async function POST(req: NextRequest) {
     const card = body.action.data.card;
     console.log('New Trello card:', card.name);
 
-    // TODO: Save to Supabase
     return NextResponse.json({ success: true });
   }
 
