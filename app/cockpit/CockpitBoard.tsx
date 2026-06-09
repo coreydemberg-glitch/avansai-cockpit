@@ -109,6 +109,37 @@ function CandidateModal({
     }
   };
 
+  const [composing, setComposing] = useState(false);
+  const [emailTo, setEmailTo] = useState(candidate.email ?? '');
+  const [emailSubject, setEmailSubject] = useState('');
+  const [emailBody, setEmailBody] = useState('');
+  const [sending, setSending] = useState(false);
+  const [emailMsg, setEmailMsg] = useState<string | null>(null);
+
+  const handleSend = async () => {
+    setEmailMsg(null);
+    setSending(true);
+    try {
+      const res = await fetch('/api/send-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          to: emailTo,
+          subject: emailSubject,
+          body: emailBody,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to send');
+      setComposing(false);
+      setActionMsg('✉️ Email sent');
+    } catch (e) {
+      setEmailMsg(e instanceof Error ? e.message : 'Failed to send');
+    } finally {
+      setSending(false);
+    }
+  };
+
   const handleSave = () => {
     setSaveMsg(null);
     startTransition(async () => {
@@ -220,7 +251,7 @@ function CandidateModal({
         )}
 
         <div style={styles.actionsRow}>
-          <button style={styles.actionBtn} onClick={() => stub('Email candidate')}>
+          <button style={styles.actionBtn} onClick={() => setComposing(true)}>
             ✉️ Email candidate
           </button>
           <button style={styles.actionBtn} onClick={() => stub('Log to Bullhorn')}>
@@ -234,6 +265,50 @@ function CandidateModal({
           </button>
         </div>
         {actionMsg && <p style={styles.actionMsg}>{actionMsg}</p>}
+
+        {composing && (
+          <div style={styles.composeBox}>
+            <label style={styles.label}>To</label>
+            <input
+              style={styles.input}
+              value={emailTo}
+              onChange={(e) => setEmailTo(e.target.value)}
+              placeholder="candidate@email.com"
+            />
+            <label style={styles.label}>Subject</label>
+            <input
+              style={styles.input}
+              value={emailSubject}
+              onChange={(e) => setEmailSubject(e.target.value)}
+              placeholder="Subject"
+            />
+            <label style={styles.label}>Body</label>
+            <textarea
+              style={styles.textarea}
+              rows={5}
+              value={emailBody}
+              onChange={(e) => setEmailBody(e.target.value)}
+              placeholder="Message…"
+            />
+            <div style={styles.saveRow}>
+              <button
+                style={styles.primaryBtn}
+                onClick={handleSend}
+                disabled={sending || !emailTo}
+              >
+                {sending ? 'Sending…' : 'Send'}
+              </button>
+              <button style={styles.actionBtn} onClick={() => setComposing(false)}>
+                Cancel
+              </button>
+              {emailMsg && (
+                <span style={{ ...styles.saveMsg, color: '#b91c1c' }}>
+                  {emailMsg}
+                </span>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -428,4 +503,21 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 13,
   },
   actionMsg: { marginTop: 10, fontSize: 13, color: '#6b7280' },
+  composeBox: {
+    marginTop: 14,
+    border: '1px solid #e5e7eb',
+    borderRadius: 8,
+    padding: 14,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 6,
+  },
+  input: {
+    padding: 8,
+    border: '1px solid #d1d5db',
+    borderRadius: 6,
+    fontFamily: 'inherit',
+    fontSize: 14,
+    boxSizing: 'border-box',
+  },
 };

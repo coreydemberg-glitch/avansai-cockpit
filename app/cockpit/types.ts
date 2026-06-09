@@ -3,6 +3,7 @@
 export type Candidate = {
   id: string;
   name: string | null;
+  email: string | null;
   role: string | null;
   linkedin_url: string | null;
   trello_card_id: string | null;

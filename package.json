@@ -12,11 +12,13 @@
     "@anthropic-ai/sdk": "^0.102.0",
     "@supabase/supabase-js": "^2.108.0",
     "next": "14.2.5",
+    "nodemailer": "^8.0.10",
     "react": "^18",
     "react-dom": "^18"
   },
   "devDependencies": {
     "@types/node": "^20",
+    "@types/nodemailer": "^8.0.0",
     "@types/react": "^18",
     "@types/react-dom": "^18",
     "typescript": "^5"
