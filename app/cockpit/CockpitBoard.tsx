@@ -1,8 +1,19 @@
 'use client';
 
-import { useEffect, useState, useTransition } from 'react';
-import type { Candidate } from './types';
-import { saveNotes, saveLinkedin } from './actions';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useTransition,
+} from 'react';
+import type { Candidate, EmailTemplate, JobDescription } from './types';
+import {
+  saveNotes,
+  saveLinkedin,
+  listJobDescriptions,
+  getEmailTemplate,
+} from './actions';
 
 const trelloUrl = (cardId: string | null) =>
   cardId ? `https://trello.com/c/${cardId}` : null;
@@ -31,10 +42,34 @@ const stageTint: Record<Stage, string> = {
 
 export default function CockpitBoard({
   candidates,
+  jobs: initialJobs,
+  loadError = null,
 }: {
   candidates: Candidate[];
+  jobs: JobDescription[];
+  loadError?: string | null;
 }) {
   const [selected, setSelected] = useState<Candidate | null>(null);
+
+  // Job descriptions live here so both the email picker (inside the modal) and
+  // the parking-lot upload dialog share one list. Seeded from the server, then
+  // re-fetched after an upload so a new JD shows up immediately.
+  const [jobs, setJobs] = useState<JobDescription[]>(initialJobs);
+  const [showAddJob, setShowAddJob] = useState(false);
+  const refreshJobs = useCallback(async () => {
+    const res = await listJobDescriptions();
+    if (res.ok) setJobs(res.jobs);
+  }, []);
+
+  // Far-left utility rail. More buttons can be appended here over time.
+  const parkingActions: ParkingAction[] = [
+    {
+      key: 'add-job',
+      icon: '📄',
+      label: 'Add Job Description',
+      onClick: () => setShowAddJob(true),
+    },
+  ];
 
   // Date is rendered after mount to avoid an SSR/client hydration mismatch.
   const [today, setToday] = useState('');
@@ -58,7 +93,10 @@ export default function CockpitBoard({
   ).length;
 
   return (
-    <main style={styles.page}>
+    <div style={styles.shell}>
+      <ParkingLot actions={parkingActions} />
+
+      <main style={styles.page}>
       <header style={styles.header}>
         <div style={styles.headerLeft}>
           <h1 style={styles.h1}>Cockpit</h1>
@@ -66,6 +104,12 @@ export default function CockpitBoard({
         </div>
         <span style={styles.date}>{today}</span>
       </header>
+
+      {loadError && (
+        <p style={styles.loadError}>
+          Some data couldn’t be loaded: {loadError}
+        </p>
+      )}
 
       <section style={styles.statsBar}>
         <StatCard value={total} label="Total Candidates" />
@@ -109,11 +153,157 @@ export default function CockpitBoard({
 
       {selected && (
         <CandidateModal
+          key={selected.id}
           candidate={selected}
+          jobs={jobs}
           onClose={() => setSelected(null)}
         />
       )}
-    </main>
+      </main>
+
+      {showAddJob && (
+        <AddJobDescriptionDialog
+          onClose={() => setShowAddJob(false)}
+          onUploaded={refreshJobs}
+        />
+      )}
+    </div>
+  );
+}
+
+type ParkingAction = {
+  key: string;
+  icon: string;
+  label: string;
+  onClick: () => void;
+};
+
+// Far-left vertical rail of utility buttons. Render-only and data-driven, so
+// new tools are added by appending to the `actions` array — no layout changes.
+function ParkingLot({ actions }: { actions: ParkingAction[] }) {
+  return (
+    <aside style={styles.parkingLot} aria-label="Utilities">
+      <div style={styles.parkingBrand} aria-hidden />
+      {actions.map((a) => (
+        <button
+          key={a.key}
+          type="button"
+          style={styles.parkingBtn}
+          onClick={a.onClick}
+          title={a.label}
+        >
+          <span style={styles.parkingIcon} aria-hidden>
+            {a.icon}
+          </span>
+          <span style={styles.parkingLabel}>{a.label}</span>
+        </button>
+      ))}
+    </aside>
+  );
+}
+
+// Upload dialog launched from the parking lot: pick a PDF + type a title, POST
+// to /api/upload-job-description, then refresh the shared job list so the new JD
+// is immediately selectable in the email picker.
+function AddJobDescriptionDialog({
+  onClose,
+  onUploaded,
+}: {
+  onClose: () => void;
+  onUploaded: () => Promise<void> | void;
+}) {
+  const [title, setTitle] = useState('');
+  const [file, setFile] = useState<File | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
+
+  const handleUpload = async () => {
+    if (!file || !title.trim() || uploading) return;
+    setMsg(null);
+    setUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append('title', title.trim());
+      fd.append('file', file);
+      const res = await fetch('/api/upload-job-description', {
+        method: 'POST',
+        body: fd,
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Upload failed');
+      await onUploaded();
+      setDone(true);
+      setMsg('Added ✓');
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : 'Upload failed');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return (
+    <div style={styles.overlay} onClick={onClose}>
+      <div
+        style={styles.modal}
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+      >
+        <div style={styles.modalHeader}>
+          <div>
+            <h2 style={styles.modalTitle}>Add Job Description</h2>
+            <p style={styles.modalSub}>Upload a PDF to attach in candidate emails</p>
+          </div>
+          <button style={styles.closeBtn} onClick={onClose} aria-label="Close">
+            ✕
+          </button>
+        </div>
+
+        <div style={{ ...styles.sectionCol, marginTop: 18 }}>
+          <label style={styles.label}>Title</label>
+          <input
+            style={styles.input}
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="e.g. Full Stack Developer"
+          />
+          <label style={{ ...styles.label, marginTop: 12 }}>PDF file</label>
+          <input
+            type="file"
+            accept="application/pdf"
+            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+            disabled={uploading}
+            style={styles.input}
+          />
+          <div style={styles.saveRow}>
+            {done ? (
+              <button style={styles.primaryBtn} onClick={onClose}>
+                Done
+              </button>
+            ) : (
+              <button
+                style={styles.primaryBtn}
+                onClick={handleUpload}
+                disabled={uploading || !file || !title.trim()}
+              >
+                {uploading ? 'Uploading…' : 'Upload'}
+              </button>
+            )}
+            {msg && (
+              <span
+                style={{
+                  ...styles.saveMsg,
+                  color: msg.startsWith('Added') ? '#34e5a0' : '#f87171',
+                }}
+              >
+                {msg}
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -149,11 +339,17 @@ function StatusPill({
 
 function CandidateModal({
   candidate,
+  jobs,
   onClose,
 }: {
   candidate: Candidate;
+  jobs: JobDescription[];
   onClose: () => void;
 }) {
+  const [activeTab, setActiveTab] = useState<
+    'email' | 'notes' | 'resume' | 'linkedin'
+  >('notes');
+
   const [notes, setNotes] = useState(candidate.notes ?? '');
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
@@ -184,21 +380,75 @@ function CandidateModal({
 
   const [emailTo, setEmailTo] = useState(candidate.email ?? '');
   const [emailSubject, setEmailSubject] = useState('');
+  const [emailGreeting, setEmailGreeting] = useState('');
   const [emailBody, setEmailBody] = useState('');
+  const [selectedJobId, setSelectedJobId] = useState('');
   const [sending, setSending] = useState(false);
   const [emailMsg, setEmailMsg] = useState<string | null>(null);
+
+  // Template prefill: fetched from Supabase the first time the email panel is
+  // opened, so copy edits take effect without a code change. The greeting is
+  // shown as its own editable field; [name] is filled with the first name.
+  const [templateLoading, setTemplateLoading] = useState(false);
+  const [templateError, setTemplateError] = useState<string | null>(null);
+  const prefillStarted = useRef(false);
+
+  useEffect(() => {
+    if (activeTab !== 'email' || prefillStarted.current) return;
+    prefillStarted.current = true;
+
+    const firstName =
+      (candidate.name || '').trim().split(/\s+/)[0] || 'there';
+    const fill = (s: string) => s.split('[name]').join(firstName);
+
+    let cancelled = false;
+    setTemplateLoading(true);
+    setTemplateError(null);
+    getEmailTemplate('candidate_follow_up')
+      .then((res) => {
+        if (cancelled) return;
+        if (res.ok && res.template) {
+          const t: EmailTemplate = res.template;
+          setEmailSubject(t.subject);
+          setEmailGreeting(fill(t.greeting));
+          setEmailBody(fill(t.body));
+        } else {
+          setTemplateError(res.error || 'Could not load the email template.');
+        }
+      })
+      .catch((e) => {
+        if (!cancelled)
+          setTemplateError(
+            e instanceof Error ? e.message : 'Could not load the email template.'
+          );
+      })
+      .finally(() => {
+        if (!cancelled) setTemplateLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+    // activeTab is the trigger; the rest is read once via the prefillStarted guard.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
 
   const handleSend = async () => {
     setEmailMsg(null);
     setSending(true);
     try {
+      const job = jobs.find((j) => j.id === selectedJobId);
+      const attachment = job
+        ? { path: job.file_path, filename: `${job.title}.pdf` }
+        : undefined;
       const res = await fetch('/api/send-email', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           to: emailTo,
           subject: emailSubject,
-          body: emailBody,
+          body: `${emailGreeting}\n\n${emailBody}`,
+          attachment,
         }),
       });
       const data = await res.json();
@@ -268,9 +518,6 @@ function CandidateModal({
     setLinkedinSaving(false);
   };
 
-  const [activeTab, setActiveTab] = useState<
-    'email' | 'notes' | 'resume' | 'linkedin'
-  >('notes');
   const resumeName = resumeUrl
     ? decodeURIComponent(resumeUrl.split('/').pop() || 'resume').replace(
         /^\d+-/,
@@ -398,6 +645,12 @@ function CandidateModal({
 
           {activeTab === 'email' && (
             <div style={styles.sectionCol}>
+              {templateLoading && (
+                <span style={styles.actionMsg}>Loading template…</span>
+              )}
+              {templateError && (
+                <p style={styles.cleanErrMsg}>{templateError}</p>
+              )}
               <label style={styles.label}>To</label>
               <input
                 style={styles.input}
@@ -412,14 +665,39 @@ function CandidateModal({
                 onChange={(e) => setEmailSubject(e.target.value)}
                 placeholder="Subject"
               />
+              <label style={styles.label}>Greeting</label>
+              <input
+                style={styles.input}
+                value={emailGreeting}
+                onChange={(e) => setEmailGreeting(e.target.value)}
+                placeholder="Hi [name],"
+              />
               <label style={styles.label}>Body</label>
               <textarea
                 style={styles.textarea}
-                rows={5}
+                rows={12}
                 value={emailBody}
                 onChange={(e) => setEmailBody(e.target.value)}
                 placeholder="Message…"
               />
+              <label style={styles.label}>Attach job description</label>
+              <select
+                style={styles.input}
+                value={selectedJobId}
+                onChange={(e) => setSelectedJobId(e.target.value)}
+              >
+                <option value="">No attachment</option>
+                {jobs.map((j) => (
+                  <option key={j.id} value={j.id}>
+                    {j.title}
+                  </option>
+                ))}
+              </select>
+              {jobs.length === 0 && (
+                <span style={styles.hint}>
+                  No job descriptions yet — add one from the left panel.
+                </span>
+              )}
               <div style={styles.saveRow}>
                 <button
                   style={styles.primaryBtn}
@@ -571,7 +849,15 @@ function Field({
 const FONT = "Inter, system-ui, -apple-system, sans-serif";
 
 const styles: Record<string, React.CSSProperties> = {
+  shell: {
+    display: 'flex',
+    alignItems: 'stretch',
+    minHeight: '100vh',
+    background: '#0f1115',
+  },
   page: {
+    flex: 1,
+    minWidth: 0,
     minHeight: '100vh',
     padding: 40,
     fontFamily: FONT,
@@ -579,6 +865,65 @@ const styles: Record<string, React.CSSProperties> = {
     margin: '0 auto',
     background: '#0f1115',
     color: '#e8eaed',
+    fontWeight: 400,
+  },
+  loadError: {
+    marginTop: 16,
+    fontSize: 12,
+    color: '#f0a13a',
+    background: 'rgba(240, 161, 58, 0.10)',
+    border: '1px solid rgba(240, 161, 58, 0.30)',
+    borderRadius: 10,
+    padding: '8px 12px',
+  },
+
+  // Far-left utility rail ("parking lot").
+  parkingLot: {
+    position: 'sticky',
+    top: 0,
+    alignSelf: 'flex-start',
+    height: '100vh',
+    width: 92,
+    flexShrink: 0,
+    background: '#14171d',
+    borderRight: '1px solid #262a33',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: 12,
+    padding: '16px 8px',
+    boxSizing: 'border-box',
+    // Scroll if more utility buttons than fit are added over time.
+    overflowY: 'auto',
+  },
+  parkingBrand: {
+    width: 26,
+    height: 26,
+    borderRadius: 8,
+    background: '#34e5a0',
+    marginBottom: 6,
+    flexShrink: 0,
+  },
+  parkingBtn: {
+    width: '100%',
+    border: '1px solid #262a33',
+    borderRadius: 12,
+    background: '#1a1d24',
+    color: '#e8eaed',
+    cursor: 'pointer',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: 5,
+    padding: '10px 4px',
+    fontFamily: FONT,
+  },
+  parkingIcon: { fontSize: 20, lineHeight: 1 },
+  parkingLabel: {
+    fontSize: 9.5,
+    lineHeight: 1.2,
+    textAlign: 'center',
+    color: '#8b909c',
     fontWeight: 400,
   },
   header: {
@@ -807,6 +1152,7 @@ const styles: Record<string, React.CSSProperties> = {
     paddingTop: 18,
   },
   actionMsg: { marginTop: 12, fontSize: 13, color: '#8b909c' },
+  hint: { fontSize: 11, color: '#8b909c', marginTop: 2 },
   input: {
     marginTop: 6,
     padding: 10,
