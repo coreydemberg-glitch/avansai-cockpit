@@ -13,7 +13,34 @@ export type Candidate = {
   // Hidden from the cockpit when Corey is removed from the Trello card.
   // Recoverable: the row stays; re-adding him on Trello sets this back to false.
   archived?: boolean | null;
+
+  // Funnel-timeline state (build spec §4). Synced from the candidate's Trello
+  // column by the webhook. All optional so rows from before the 0002 migration
+  // (and the cockpit) keep working if the columns aren't present yet.
+  funnel_stage?: number | null; // 1..5; null = not placed in the funnel yet
+  pending?: boolean | null; // sitting in a dotted "pending zone" after a stage
+  prep_sent?: boolean | null; // prep emailed → segment flips amber → green
+  dq?: boolean | null; // exited the funnel to the DQ column
 };
+
+// A row in `action_items`. Auto-populated by the webhook when a candidate enters
+// a state that needs action; the funnel's action panel reads open rows directly.
+export type ActionItem = {
+  id: string;
+  candidate_id: string;
+  type: 'prep' | 'feedback' | 'thankyou';
+  status: 'open' | 'done';
+  created_at?: string | null;
+};
+
+// An open action item joined to its candidate, as the action panel consumes it.
+export type ActionItemWithCandidate = ActionItem & {
+  candidate: Candidate | null;
+};
+
+// Which flow the candidate modal should open in when launched from a funnel
+// action (drives the active tab + which email template/prompt is prefilled).
+export type ActionContext = 'prep' | 'feedback' | 'thankyou';
 
 // A row in `job_descriptions`. `file_path` is the object path within the
 // `job-descriptions` storage bucket — the send-email route downloads it

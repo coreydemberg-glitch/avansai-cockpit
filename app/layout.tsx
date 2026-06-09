@@ -1,6 +1,11 @@
-import { Inter } from 'next/font/google';
+import { Manrope } from 'next/font/google';
 
-const inter = Inter({ subsets: ['latin'], display: 'swap' });
+// Funnel design system (build spec §7): Manrope with the documented fallback.
+const manrope = Manrope({
+  subsets: ['latin'],
+  display: 'swap',
+  fallback: ['Segoe UI', 'system-ui', 'sans-serif'],
+});
 
 export const metadata = {
   title: 'Avansai Cockpit',
@@ -9,8 +14,16 @@ export const metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={inter.className}>
-      <body style={{ margin: 0, background: '#0f1115' }}>{children}</body>
+    <html lang="en" className={manrope.className}>
+      <head>
+        {/* Tabler outline icon webfont (spec §7: outline only, e.g. ti-mail). */}
+        <link
+          rel="stylesheet"
+          href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.31.0/dist/tabler-icons.min.css"
+        />
+      </head>
+      {/* bg token #1c1c23 */}
+      <body style={{ margin: 0, background: '#1c1c23' }}>{children}</body>
     </html>
   );
 }
