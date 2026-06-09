@@ -62,3 +62,66 @@ export type EmailTemplate = {
   greeting: string;
   body: string;
 };
+
+// ── Outreach (Outbound + Referral quadrants, 0003 migration) ────────────────
+// All fields optional/nullable so the cockpit still type-checks and renders
+// before the 0003 migration is applied (mirrors how the funnel columns were
+// added to Candidate).
+
+export type ContactListType = 'outbound' | 'referral';
+
+// A row in `contacts` — the shared person record behind both quadrants.
+export type Contact = {
+  id: string;
+  list_type: ContactListType;
+  name: string | null;
+  first_name: string | null;
+  email: string | null;
+  title: string | null;
+  company: string | null;
+  source_project: string | null; // Outbound "Title/Project"
+  linkedin_url: string | null;
+  enrichment_status?: 'pending' | 'enriched' | 'failed' | null;
+  email_status?: 'unknown' | 'ok' | 'missing' | null;
+  contacted?: boolean | null; // Outbound "Sent status"
+  last_contacted_at?: string | null; // Referral "Date last contacted"
+  archived?: boolean | null;
+  raw?: Record<string, unknown> | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+// A row in `contact_work_history` — one company-tenure. The structured schema
+// that makes "who in my network worked at [Company]?" a single query.
+export type ContactWorkHistory = {
+  id: string;
+  contact_id: string;
+  company: string;
+  company_normalized?: string | null; // generated (lower/trim) in the DB
+  title: string | null;
+  start_date: string | null;
+  end_date: string | null; // null = current/unknown
+  is_current?: boolean | null;
+  source?: 'manual' | 'resume' | 'linkedin' | 'apollo' | 'csv' | null;
+  created_at?: string | null;
+};
+
+// A row in `referrals` — someone a contact has referred. referred_contact_id is
+// null until the referred person is themselves a contact; referred_name holds
+// the free-text name in the meantime.
+export type Referral = {
+  id: string;
+  referrer_contact_id: string;
+  referred_contact_id: string | null;
+  referred_name: string | null;
+  note: string | null;
+  created_at?: string | null;
+};
+
+// A row in `contact_notes` — a single timestamped note.
+export type ContactNote = {
+  id: string;
+  contact_id: string;
+  body: string;
+  created_at?: string | null;
+};

@@ -12,6 +12,7 @@ import type {
   ActionContext,
   ActionItemWithCandidate,
   Candidate,
+  Contact,
   EmailTemplate,
   JobDescription,
 } from './types';
@@ -30,6 +31,14 @@ import FunnelTimeline from './funnel/FunnelTimeline';
 import Legend from './funnel/Legend';
 import ActionItemsPanel from './funnel/ActionItemsPanel';
 import DqColumn from './funnel/DqColumn';
+import QuadrantTile from './outreach/QuadrantTile';
+import OutboundView from './outbound/OutboundView';
+import ReferralView from './referral/ReferralView';
+
+// Which top-level section the cockpit is showing. In-page view switching (no
+// routing) — matches the codebase's existing local-state model and keeps the
+// sidebar + center reactive to the current selection.
+type View = 'dashboard' | 'outbound' | 'referrals';
 
 const trelloUrl = (cardId: string | null) =>
   cardId ? `https://trello.com/c/${cardId}` : null;
@@ -48,14 +57,24 @@ export default function CockpitBoard({
   candidates,
   jobs: initialJobs,
   actionItems,
+  outboundContacts = [],
+  referralContacts = [],
+  referralCounts = {},
   loadError = null,
 }: {
   candidates: Candidate[];
   jobs: JobDescription[];
   actionItems: ActionItemWithCandidate[];
+  outboundContacts?: Contact[];
+  referralContacts?: Contact[];
+  referralCounts?: Record<string, number>;
   loadError?: string | null;
 }) {
   const router = useRouter();
+
+  // Top-level section (Dashboard / Outbound / Referrals). Named `section` to
+  // avoid colliding with the candidate-list `view` (active/archived) below.
+  const [section, setSection] = useState<View>('dashboard');
 
   // The selected candidate + which funnel flow opened it (null = plain detail).
   const [selected, setSelected] = useState<Candidate | null>(null);
@@ -112,7 +131,29 @@ export default function CockpitBoard({
     if (res.ok) setJobs(res.jobs);
   }, []);
 
+  // Sidebar: nav items (set the active view) + a utility action (opens a dialog).
   const parkingActions: ParkingAction[] = [
+    {
+      key: 'dashboard',
+      icon: 'ti-layout-grid',
+      label: 'Cockpit',
+      onClick: () => setSection('dashboard'),
+      active: section === 'dashboard',
+    },
+    {
+      key: 'outbound',
+      icon: 'ti-send',
+      label: 'Outbound',
+      onClick: () => setSection('outbound'),
+      active: section === 'outbound',
+    },
+    {
+      key: 'referrals',
+      icon: 'ti-affiliate',
+      label: 'Referrals',
+      onClick: () => setSection('referrals'),
+      active: section === 'referrals',
+    },
     {
       key: 'add-job',
       icon: 'ti-file-plus',
@@ -140,6 +181,28 @@ export default function CockpitBoard({
   const inFunnel = active.filter((c) => !c.dq);
   const dqCandidates = active.filter((c) => c.dq);
 
+  // Outreach stats for the dashboard preview tiles.
+  const outboundActive = outboundContacts.filter((c) => !c.archived);
+  const outboundStats = [
+    {
+      label: 'Contacts',
+      value: outboundActive.filter((c) => c.email_status !== 'missing').length,
+    },
+    { label: 'Sent', value: outboundActive.filter((c) => c.contacted).length },
+    {
+      label: 'No email',
+      value: outboundActive.filter((c) => c.email_status === 'missing').length,
+    },
+  ];
+  const referralActive = referralContacts.filter((c) => !c.archived);
+  const referralStats = [
+    { label: 'Contacts', value: referralActive.length },
+    {
+      label: 'Referrals',
+      value: Object.values(referralCounts).reduce((a, b) => a + b, 0),
+    },
+  ];
+
   return (
     <div style={styles.shell}>
       <ParkingLot actions={parkingActions} />
@@ -157,6 +220,8 @@ export default function CockpitBoard({
           <p style={styles.loadError}>Some data couldn’t be loaded: {loadError}</p>
         )}
 
+        {section === 'dashboard' && (
+        <>
         {/* 1 · Funnel timeline */}
         <section style={styles.funnelCard}>
           <div style={styles.funnelHead}>
@@ -168,6 +233,24 @@ export default function CockpitBoard({
           <FunnelTimeline
             candidates={active}
             onSelect={(c) => openCandidate(c, null)}
+          />
+        </section>
+
+        {/* 1b · New quadrants — Outbound + Referral preview tiles (drill in) */}
+        <section style={styles.panelsRow}>
+          <QuadrantTile
+            eyebrow="Outbound"
+            icon="ti-send"
+            headline="Cold outreach"
+            stats={outboundStats}
+            onOpen={() => setSection('outbound')}
+          />
+          <QuadrantTile
+            eyebrow="Referrals"
+            icon="ti-affiliate"
+            headline="Warm network"
+            stats={referralStats}
+            onOpen={() => setSection('referrals')}
           />
         </section>
 
@@ -267,6 +350,23 @@ export default function CockpitBoard({
             })}
           </div>
         )}
+        </>
+        )}
+
+        {section === 'outbound' && (
+          <OutboundView
+            contacts={outboundContacts}
+            onChanged={() => router.refresh()}
+          />
+        )}
+
+        {section === 'referrals' && (
+          <ReferralView
+            contacts={referralContacts}
+            referralCounts={referralCounts}
+            onChanged={() => router.refresh()}
+          />
+        )}
 
         {selected && (
           <CandidateModal
@@ -295,22 +395,30 @@ type ParkingAction = {
   icon: string;
   label: string;
   onClick: () => void;
+  active?: boolean;
 };
 
 function ParkingLot({ actions }: { actions: ParkingAction[] }) {
   return (
-    <aside style={styles.parkingLot} aria-label="Utilities">
+    <aside style={styles.parkingLot} aria-label="Navigation">
       <div style={styles.parkingBrand} aria-hidden />
       {actions.map((a) => (
         <button
           key={a.key}
           type="button"
-          style={styles.parkingBtn}
+          style={a.active ? styles.parkingBtnActive : styles.parkingBtn}
           onClick={a.onClick}
           title={a.label}
+          aria-current={a.active ? 'page' : undefined}
         >
-          <i className={`ti ${a.icon}`} style={styles.parkingIcon} aria-hidden />
-          <span style={styles.parkingLabel}>{a.label}</span>
+          <i
+            className={`ti ${a.icon}`}
+            style={a.active ? styles.parkingIconActive : styles.parkingIcon}
+            aria-hidden
+          />
+          <span style={a.active ? styles.parkingLabelActive : styles.parkingLabel}>
+            {a.label}
+          </span>
         </button>
       ))}
     </aside>
@@ -1123,8 +1231,24 @@ const styles: Record<string, React.CSSProperties> = {
     padding: '10px 4px',
     fontFamily: FONT,
   },
+  parkingBtnActive: {
+    width: '100%',
+    border: `1px solid ${C.green}66`,
+    borderRadius: 12,
+    background: `${C.green}1f`,
+    color: C.green,
+    cursor: 'pointer',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: 5,
+    padding: '10px 4px',
+    fontFamily: FONT,
+  },
   parkingIcon: { fontSize: 20, lineHeight: 1, color: C.white },
+  parkingIconActive: { fontSize: 20, lineHeight: 1, color: C.green },
   parkingLabel: { fontSize: 9.5, lineHeight: 1.2, textAlign: 'center', color: C.muted, fontWeight: 400 },
+  parkingLabelActive: { fontSize: 9.5, lineHeight: 1.2, textAlign: 'center', color: C.green, fontWeight: 600 },
 
   header: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12 },
   headerLeft: { display: 'flex', alignItems: 'baseline', gap: 12 },
