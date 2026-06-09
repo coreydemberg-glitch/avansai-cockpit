@@ -397,9 +397,10 @@ function CandidateModal({
     if (activeTab !== 'email' || prefillStarted.current) return;
     prefillStarted.current = true;
 
-    const firstName =
-      (candidate.name || '').trim().split(/\s+/)[0] || 'there';
-    const fill = (s: string) => s.split('[name]').join(firstName);
+    // Trello candidate names come in inconsistent formats, so for the MVP we
+    // don't try to parse a first name — drop the [name] token and let the
+    // recruiter fill in the greeting. (The body has no [name] token.)
+    const fill = (s: string) => s.split('[name]').join('');
 
     let cancelled = false;
     setTemplateLoading(true);
