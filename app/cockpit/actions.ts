@@ -66,6 +66,27 @@ export async function getEmailTemplate(
   return { ok: true, template: data as EmailTemplate };
 }
 
+// Archive (hide) or restore a candidate in the cockpit. This only flips a flag
+// on the Supabase row — it never touches Trello. Reversible: pass archived=false
+// to bring it back.
+export async function setCandidateArchived(
+  id: string,
+  archived: boolean
+): Promise<ActionResult> {
+  const supabase = getSupabaseAdmin();
+  const { error } = await supabase
+    .from('candidates')
+    .update({ archived })
+    .eq('id', id);
+
+  if (error) {
+    return { ok: false, error: error.message };
+  }
+
+  revalidatePath('/cockpit');
+  return { ok: true };
+}
+
 // Persist a candidate's LinkedIn URL (manual entry).
 export async function saveLinkedin(
   id: string,

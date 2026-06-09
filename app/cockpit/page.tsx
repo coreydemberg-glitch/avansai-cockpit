@@ -16,12 +16,10 @@ export default async function CockpitPage() {
     listJobDescriptions(),
   ]);
 
-  // Hide archived candidates (Corey was removed from the Trello card). Filtered
-  // in JS rather than in the query so the cockpit keeps working even before the
-  // `archived` column exists in the DB.
-  const candidates = ((candidatesRes.data ?? []) as Candidate[]).filter(
-    (c) => !c.archived
-  );
+  // Pass every row to the board; it splits active vs. archived client-side so
+  // the Archive/Restore buttons can update the view instantly. Rows missing the
+  // `archived` field (column not yet added) are treated as active.
+  const candidates = (candidatesRes.data ?? []) as Candidate[];
   const loadError =
     [candidatesRes.error?.message, jobsRes.error].filter(Boolean).join(' · ') ||
     null;

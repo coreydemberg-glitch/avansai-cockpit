@@ -13,6 +13,7 @@ import {
   saveLinkedin,
   listJobDescriptions,
   getEmailTemplate,
+  setCandidateArchived,
 } from './actions';
 
 const trelloUrl = (cardId: string | null) =>
@@ -51,6 +52,35 @@ export default function CockpitBoard({
 }) {
   const [selected, setSelected] = useState<Candidate | null>(null);
 
+  // Local copy of the rows so Archive/Restore updates the list instantly
+  // (optimistic), then re-syncs whenever the server sends fresh data.
+  const [rows, setRows] = useState<Candidate[]>(candidates);
+  useEffect(() => setRows(candidates), [candidates]);
+  const [view, setView] = useState<'active' | 'archived'>('active');
+  const [, startArchiveTransition] = useTransition();
+
+  // Archive = remove from the cockpit only (never Trello). Reversible via Restore.
+  const archiveCandidate = (c: Candidate, archived: boolean) => {
+    setRows((prev) =>
+      prev.map((r) => (r.id === c.id ? { ...r, archived } : r))
+    );
+    if (selected?.id === c.id) setSelected(null);
+    startArchiveTransition(async () => {
+      const res = await setCandidateArchived(c.id, archived);
+      if (!res.ok) {
+        setRows((prev) =>
+          prev.map((r) => (r.id === c.id ? { ...r, archived: !archived } : r))
+        );
+        // eslint-disable-next-line no-alert
+        alert(
+          `Couldn't ${archived ? 'archive' : 'restore'} that candidate: ${
+            res.error ?? 'unknown error'
+          }`
+        );
+      }
+    });
+  };
+
   // Job descriptions live here so both the email picker (inside the modal) and
   // the parking-lot upload dialog share one list. Seeded from the server, then
   // re-fetched after an upload so a new JD shows up immediately.
@@ -84,11 +114,15 @@ export default function CockpitBoard({
     );
   }, []);
 
-  const total = candidates.length;
-  const activePipeline = candidates.filter(
+  const active = rows.filter((c) => !c.archived);
+  const archived = rows.filter((c) => c.archived);
+  const shown = view === 'active' ? active : archived;
+
+  const total = active.length;
+  const activePipeline = active.filter(
     (c) => stageOf(c.status) === 'interview'
   ).length;
-  const needsAction = candidates.filter(
+  const needsAction = active.filter(
     (c) => stageOf(c.status) === 'new'
   ).length;
 
@@ -117,14 +151,32 @@ export default function CockpitBoard({
         <StatCard value={needsAction} label="Needs Action" />
       </section>
 
-      {candidates.length === 0 ? (
+      <div style={styles.listHeader}>
+        <div style={styles.viewToggle}>
+          <button
+            style={view === 'active' ? styles.viewTabActive : styles.viewTab}
+            onClick={() => setView('active')}
+          >
+            Active ({active.length})
+          </button>
+          <button
+            style={view === 'archived' ? styles.viewTabActive : styles.viewTab}
+            onClick={() => setView('archived')}
+          >
+            Archived ({archived.length})
+          </button>
+        </div>
+      </div>
+
+      {shown.length === 0 ? (
         <p style={styles.empty}>
-          No candidates yet. Create a card on the connected Trello board and it
-          will appear here.
+          {view === 'active'
+            ? 'No candidates here yet. Add yourself as a member on a Trello card and it will appear.'
+            : 'Nothing archived. Use the Archive button on a card to remove it from the cockpit.'}
         </p>
       ) : (
         <div style={styles.list}>
-          {candidates.map((c) => {
+          {shown.map((c) => {
             const stage = stageOf(c.status);
             return (
               <article
@@ -132,6 +184,7 @@ export default function CockpitBoard({
                 style={{
                   ...styles.card,
                   borderLeft: `3px solid ${stageColor[stage]}`,
+                  ...(c.archived ? styles.cardArchived : null),
                 }}
                 onClick={() => setSelected(c)}
                 role="button"
@@ -144,7 +197,32 @@ export default function CockpitBoard({
                   <h2 style={styles.name}>{c.name || 'Untitled'}</h2>
                   <p style={styles.role}>{c.role || 'Role not set'}</p>
                 </div>
-                <StatusPill stage={stage} status={c.status} />
+                <div style={styles.cardRight}>
+                  <StatusPill stage={stage} status={c.status} />
+                  {view === 'active' ? (
+                    <button
+                      style={styles.archiveBtn}
+                      title="Remove from cockpit (does NOT touch Trello)"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        archiveCandidate(c, true);
+                      }}
+                    >
+                      Archive
+                    </button>
+                  ) : (
+                    <button
+                      style={styles.restoreBtn}
+                      title="Bring back into the cockpit"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        archiveCandidate(c, false);
+                      }}
+                    >
+                      Restore
+                    </button>
+                  )}
+                </div>
               </article>
             );
           })}
@@ -982,8 +1060,37 @@ const styles: Record<string, React.CSSProperties> = {
 
   empty: { marginTop: 28, color: '#8b909c', fontSize: 14 },
 
-  list: {
+  listHeader: {
     marginTop: 28,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+  },
+  viewToggle: { display: 'flex', gap: 6 },
+  viewTab: {
+    padding: '6px 12px',
+    border: '1px solid #262a33',
+    borderRadius: 999,
+    background: 'transparent',
+    color: '#8b909c',
+    fontSize: 12,
+    fontWeight: 400,
+    fontFamily: FONT,
+    cursor: 'pointer',
+  },
+  viewTabActive: {
+    padding: '6px 12px',
+    border: '1px solid rgba(52, 229, 160, 0.4)',
+    borderRadius: 999,
+    background: 'rgba(52, 229, 160, 0.12)',
+    color: '#34e5a0',
+    fontSize: 12,
+    fontWeight: 500,
+    fontFamily: FONT,
+    cursor: 'pointer',
+  },
+  list: {
+    marginTop: 14,
     display: 'flex',
     flexDirection: 'column',
     gap: 10,
@@ -1000,6 +1107,32 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: 'pointer',
   },
   cardMain: { display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 },
+  cardRight: { display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 },
+  cardArchived: { opacity: 0.55 },
+  archiveBtn: {
+    padding: '5px 10px',
+    border: '1px solid #262a33',
+    borderRadius: 8,
+    background: 'transparent',
+    color: '#8b909c',
+    fontSize: 11,
+    fontWeight: 400,
+    fontFamily: FONT,
+    cursor: 'pointer',
+    whiteSpace: 'nowrap',
+  },
+  restoreBtn: {
+    padding: '5px 10px',
+    border: '1px solid rgba(52, 229, 160, 0.4)',
+    borderRadius: 8,
+    background: 'rgba(52, 229, 160, 0.12)',
+    color: '#34e5a0',
+    fontSize: 11,
+    fontWeight: 500,
+    fontFamily: FONT,
+    cursor: 'pointer',
+    whiteSpace: 'nowrap',
+  },
   name: {
     margin: 0,
     fontSize: 14,
