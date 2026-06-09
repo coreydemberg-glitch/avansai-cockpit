@@ -102,6 +102,11 @@ type FunnelEntry = {
   // The to-do surfaced when a candidate enters this column, if any. `prep` also
   // re-arms the amber segment (prep_sent → false) since new prep is owed.
   action?: 'prep' | 'feedback' | 'thankyou';
+  // The day-of-week interview columns are reused across rounds. When true,
+  // syncFunnel resolves the stage at runtime from feedback history: no R1 feedback
+  // captured yet → stage 3 (R1), R1 feedback already logged → stage 4 (R2 / manager).
+  // `stage` above is the nominal default (R2) used when history can't be read.
+  disambiguateByFeedback?: boolean;
 };
 
 // Trello list name (lower-cased, trimmed) → funnel state. Names per spec §3 —
@@ -113,11 +118,14 @@ const LIST_TO_FUNNEL: Record<string, FunnelEntry> = {
   'call schedule': { stage: 1, pending: false, dq: false },
   presented: { stage: 2, pending: false, dq: false, action: 'prep' }, // R1 interview prep
   pending: { stage: 2, pending: true, dq: false, action: 'feedback' }, // capture R1 feedback
-  mon: { stage: 3, pending: false, dq: false, action: 'prep' }, // R2 / manager prep
-  tue: { stage: 3, pending: false, dq: false, action: 'prep' },
-  wed: { stage: 3, pending: false, dq: false, action: 'prep' },
-  thu: { stage: 3, pending: false, dq: false, action: 'prep' },
-  fri: { stage: 3, pending: false, dq: false, action: 'prep' },
+  // Day-of-week interview columns → the manager round (R2 / stage 4) by default, but
+  // reused for R1 too, so disambiguate by whether R1 feedback was logged (see
+  // syncFunnel). They surface R2/manager prep on entry.
+  mon: { stage: 4, pending: false, dq: false, action: 'prep', disambiguateByFeedback: true },
+  tue: { stage: 4, pending: false, dq: false, action: 'prep', disambiguateByFeedback: true },
+  wed: { stage: 4, pending: false, dq: false, action: 'prep', disambiguateByFeedback: true },
+  thu: { stage: 4, pending: false, dq: false, action: 'prep', disambiguateByFeedback: true },
+  fri: { stage: 4, pending: false, dq: false, action: 'prep', disambiguateByFeedback: true },
   dq: { pending: false, dq: true, action: 'thankyou' }, // thank-you email
 };
 
@@ -140,9 +148,10 @@ function isMissingFunnelSchema(error: {
     error?.code === '42P01' || // undefined_table
     error?.code === 'PGRST204' || // column not found (schema cache)
     error?.code === 'PGRST205' || // table not found (schema cache)
-    /funnel_stage|prep_sent|\bpending\b|\bdq\b|action_items/i.test(
-      error?.message ?? ''
-    )
+    // Only match qualified schema-object tokens — the SQLSTATE codes above cover
+    // missing column/table. (Deliberately NOT \bpending\b/\bdq\b: those are real
+    // column names, so a genuine NOT-NULL/check violation must not be swallowed.)
+    /funnel_stage|prep_sent|action_items/i.test(error?.message ?? '')
   );
 }
 
@@ -155,20 +164,51 @@ async function syncFunnel(cardId: string, listName: string | null) {
   const entry = LIST_TO_FUNNEL[listName.trim().toLowerCase()];
   if (!entry) return; // column not part of the funnel → leave state untouched
 
+  // Resolve the candidate this card belongs to. We also read `notes`, where logged
+  // interview feedback is accrued (see actions.ts saveFeedback), so we can
+  // disambiguate the reused day-of-week interview columns below.
+  const { data: cand, error: findErr } = await supabase
+    .from('candidates')
+    .select('id, notes')
+    .eq('trello_card_id', cardId)
+    .maybeSingle();
+
+  if (findErr) {
+    if (isMissingFunnelSchema(findErr)) {
+      console.warn(
+        'Funnel columns missing — skipping funnel sync. Run supabase/migrations/0002_funnel.sql'
+      );
+      return;
+    }
+    console.error('Funnel sync failed (candidate lookup):', findErr);
+    return;
+  }
+  if (!cand?.id) return; // card isn't in the cockpit (no matching candidate)
+
+  // Resolve the stage. Day-of-week columns are reused across rounds, so when the
+  // entry asks for it, choose R1 (stage 3) vs R2 (stage 4) from whether R1 feedback
+  // was actually captured. We key off saved feedback CONTENT (the marker saveFeedback
+  // writes into notes), NOT the feedback action item's status — the latter is also
+  // flipped to 'done' when a card skips Pending, so it can't tell a logged round from
+  // a skipped one (e.g. a Mon→Tue reschedule must stay R1, not jump to R2).
+  let stage = entry.stage;
+  if (entry.disambiguateByFeedback) {
+    const r1FeedbackCaptured = /--- Interview feedback/i.test(cand.notes ?? '');
+    stage = r1FeedbackCaptured ? 4 : 3;
+  }
+
   const patch: Record<string, unknown> = {
     pending: entry.pending,
     dq: entry.dq,
   };
-  if (entry.stage != null) patch.funnel_stage = entry.stage;
+  if (stage != null) patch.funnel_stage = stage;
   // Entering a prep stage re-arms the amber segment; a new prep is owed.
   if (entry.action === 'prep') patch.prep_sent = false;
 
-  const { data, error } = await supabase
+  const { error } = await supabase
     .from('candidates')
     .update(patch)
-    .eq('trello_card_id', cardId)
-    .select('id')
-    .maybeSingle();
+    .eq('id', cand.id);
 
   if (error) {
     if (isMissingFunnelSchema(error)) {
@@ -180,14 +220,31 @@ async function syncFunnel(cardId: string, listName: string | null) {
     console.error('Funnel sync failed:', error);
     return;
   }
-  if (!data?.id) return; // card isn't in the cockpit (no matching candidate)
 
   if (entry.action) {
+    // Trello moves are self-reconciling: the new column owns exactly one action
+    // type, so retire the candidate's open items of OTHER types first. This keeps
+    // the action panel and the funnel/DQ view in agreement across transitions —
+    // e.g. Pending→Mon clears the stale 'feedback' item, any→DQ clears prep/feedback
+    // (leaving only 'thankyou'), and DQ→Presented clears the old 'thankyou'.
+    const stale = (['prep', 'feedback', 'thankyou'] as const).filter(
+      (t) => t !== entry.action
+    );
+    const { error: closeErr } = await supabase
+      .from('action_items')
+      .update({ status: 'done' })
+      .eq('candidate_id', cand.id)
+      .in('type', stale)
+      .eq('status', 'open');
+    if (closeErr && !isMissingFunnelSchema(closeErr)) {
+      console.error('Failed to close superseded action items:', closeErr);
+    }
+
     // Insert the to-do; the partial unique index keeps at most one OPEN item per
     // (candidate, type), so a re-fired move is a harmless no-op (23505 ignored).
     const { error: aiErr } = await supabase
       .from('action_items')
-      .insert({ candidate_id: data.id, type: entry.action, status: 'open' });
+      .insert({ candidate_id: cand.id, type: entry.action, status: 'open' });
     if (aiErr && aiErr.code !== '23505') {
       if (isMissingFunnelSchema(aiErr)) {
         console.warn(
@@ -209,7 +266,15 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  const body = await req.json();
+  // Tolerate empty / non-JSON bodies (probes, verification pings): return 2xx so
+  // Trello doesn't retry a body it can never parse, matching this route's
+  // always-2xx webhook convention.
+  let body: any;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ success: true, skipped: 'no-body' });
+  }
   const action = body?.action;
   const type: string | undefined = action?.type;
 
