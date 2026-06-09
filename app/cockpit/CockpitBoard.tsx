@@ -86,6 +86,29 @@ function CandidateModal({
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
+  const [cleaned, setCleaned] = useState<string | null>(null);
+  const [cleaning, setCleaning] = useState(false);
+  const [cleanErr, setCleanErr] = useState<string | null>(null);
+
+  const handleClean = async () => {
+    setCleanErr(null);
+    setCleaning(true);
+    try {
+      const res = await fetch('/api/clean-notes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notes }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to clean notes');
+      setCleaned(data.structured);
+    } catch (e) {
+      setCleanErr(e instanceof Error ? e.message : 'Failed to clean notes');
+    } finally {
+      setCleaning(false);
+    }
+  };
+
   const handleSave = () => {
     setSaveMsg(null);
     startTransition(async () => {
@@ -163,6 +186,13 @@ function CandidateModal({
         />
         <div style={styles.saveRow}>
           <button
+            style={styles.cleanBtn}
+            onClick={handleClean}
+            disabled={cleaning || notes.trim().length === 0}
+          >
+            {cleaning ? 'Cleaning…' : cleaned ? 'Re-clean notes' : 'Clean notes'}
+          </button>
+          <button
             style={styles.primaryBtn}
             onClick={handleSave}
             disabled={isPending}
@@ -180,6 +210,14 @@ function CandidateModal({
             </span>
           )}
         </div>
+
+        {cleanErr && <p style={styles.cleanErrMsg}>{cleanErr}</p>}
+        {cleaned !== null && (
+          <div style={styles.cleanedBox}>
+            <div style={styles.cleanedLabel}>Structured (AI cleanup)</div>
+            <div style={styles.cleanedText}>{cleaned}</div>
+          </div>
+        )}
 
         <div style={styles.actionsRow}>
           <button style={styles.actionBtn} onClick={() => stub('Email candidate')}>
@@ -343,6 +381,36 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 14,
   },
   saveMsg: { fontSize: 13 },
+  cleanBtn: {
+    padding: '8px 16px',
+    border: '1px solid #111827',
+    borderRadius: 6,
+    background: '#fff',
+    color: '#111827',
+    cursor: 'pointer',
+    fontSize: 14,
+  },
+  cleanErrMsg: { marginTop: 10, fontSize: 13, color: '#b91c1c' },
+  cleanedBox: {
+    marginTop: 14,
+    border: '1px solid #e5e7eb',
+    borderRadius: 8,
+    background: '#f9fafb',
+    padding: 14,
+  },
+  cleanedLabel: {
+    fontSize: 12,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+    color: '#9ca3af',
+    marginBottom: 8,
+  },
+  cleanedText: {
+    fontSize: 14,
+    lineHeight: 1.5,
+    whiteSpace: 'pre-wrap',
+    color: '#111827',
+  },
   actionsRow: {
     display: 'flex',
     flexWrap: 'wrap',
