@@ -1,11 +1,33 @@
 'use client';
 
-import { useState, useTransition } from 'react';
+import { useEffect, useState, useTransition } from 'react';
 import type { Candidate } from './types';
 import { saveNotes, saveLinkedin } from './actions';
 
 const trelloUrl = (cardId: string | null) =>
   cardId ? `https://trello.com/c/${cardId}` : null;
+
+// Classify a candidate into one of three pipeline stages from its free-text
+// status. Drives both the list rail/pill colors and the stats bar counts.
+type Stage = 'new' | 'interview' | 'sourced';
+const stageOf = (status: string | null): Stage => {
+  const s = (status || '').toLowerCase();
+  if (s.includes('interview')) return 'interview';
+  if (s.includes('source')) return 'sourced';
+  return 'new';
+};
+
+const stageColor: Record<Stage, string> = {
+  new: '#34e5a0',
+  interview: '#4a90e2',
+  sourced: '#5a5f6b',
+};
+
+const stageTint: Record<Stage, string> = {
+  new: 'rgba(52, 229, 160, 0.12)',
+  interview: 'rgba(74, 144, 226, 0.14)',
+  sourced: 'rgba(90, 95, 107, 0.18)',
+};
 
 export default function CockpitBoard({
   candidates,
@@ -14,48 +36,74 @@ export default function CockpitBoard({
 }) {
   const [selected, setSelected] = useState<Candidate | null>(null);
 
+  // Date is rendered after mount to avoid an SSR/client hydration mismatch.
+  const [today, setToday] = useState('');
+  useEffect(() => {
+    setToday(
+      new Date().toLocaleDateString(undefined, {
+        weekday: 'long',
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      })
+    );
+  }, []);
+
+  const total = candidates.length;
+  const activePipeline = candidates.filter(
+    (c) => stageOf(c.status) === 'interview'
+  ).length;
+  const needsAction = candidates.filter(
+    (c) => stageOf(c.status) === 'new'
+  ).length;
+
   return (
     <main style={styles.page}>
       <header style={styles.header}>
-        <h1 style={styles.h1}>Cockpit</h1>
-        <span style={styles.count}>
-          {candidates.length} candidate{candidates.length === 1 ? '' : 's'}
-        </span>
+        <div style={styles.headerLeft}>
+          <h1 style={styles.h1}>Cockpit</h1>
+          <span style={styles.kicker}>Recruiter view</span>
+        </div>
+        <span style={styles.date}>{today}</span>
       </header>
 
+      <section style={styles.statsBar}>
+        <StatCard value={total} label="Total Candidates" />
+        <StatCard value={activePipeline} label="Active Pipeline" />
+        <StatCard value={needsAction} label="Needs Action" />
+      </section>
+
       {candidates.length === 0 ? (
-        <p style={{ color: '#6b7280' }}>
+        <p style={styles.empty}>
           No candidates yet. Create a card on the connected Trello board and it
           will appear here.
         </p>
       ) : (
-        <div style={styles.grid}>
-          {candidates.map((c) => (
-            <article key={c.id} style={styles.card}>
-              <div style={styles.cardTop}>
-                <h2 style={styles.name}>{c.name || 'Untitled'}</h2>
-                <StatusBadge status={c.status} />
-              </div>
-              <p style={styles.role}>{c.role || 'Role not set'}</p>
-
-              <div style={styles.cardLinks}>
-                {trelloUrl(c.trello_card_id) && (
-                  <a
-                    href={trelloUrl(c.trello_card_id)!}
-                    target="_blank"
-                    rel="noreferrer"
-                    style={styles.link}
-                  >
-                    Trello card ↗
-                  </a>
-                )}
-              </div>
-
-              <button style={styles.openBtn} onClick={() => setSelected(c)}>
-                Open
-              </button>
-            </article>
-          ))}
+        <div style={styles.list}>
+          {candidates.map((c) => {
+            const stage = stageOf(c.status);
+            return (
+              <article
+                key={c.id}
+                style={{
+                  ...styles.card,
+                  borderLeft: `3px solid ${stageColor[stage]}`,
+                }}
+                onClick={() => setSelected(c)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') setSelected(c);
+                }}
+              >
+                <div style={styles.cardMain}>
+                  <h2 style={styles.name}>{c.name || 'Untitled'}</h2>
+                  <p style={styles.role}>{c.role || 'Role not set'}</p>
+                </div>
+                <StatusPill stage={stage} status={c.status} />
+              </article>
+            );
+          })}
         </div>
       )}
 
@@ -69,9 +117,34 @@ export default function CockpitBoard({
   );
 }
 
-function StatusBadge({ status }: { status: string | null }) {
+function StatCard({ value, label }: { value: number; label: string }) {
+  return (
+    <div style={styles.statCard}>
+      <div style={styles.statValue}>{value}</div>
+      <div style={styles.statLabel}>{label}</div>
+    </div>
+  );
+}
+
+function StatusPill({
+  stage,
+  status,
+}: {
+  stage: Stage;
+  status: string | null;
+}) {
   const label = status || 'New';
-  return <span style={styles.badge}>{label}</span>;
+  return (
+    <span
+      style={{
+        ...styles.pill,
+        color: stageColor[stage],
+        background: stageTint[stage],
+      }}
+    >
+      {label}
+    </span>
+  );
 }
 
 function CandidateModal({
@@ -211,6 +284,7 @@ function CandidateModal({
     setActionMsg(`${label} — not connected yet (coming soon)`);
 
   const tUrl = trelloUrl(candidate.trello_card_id);
+  const stage = stageOf(candidate.status);
 
   return (
     <div style={styles.overlay} onClick={onClose}>
@@ -222,7 +296,7 @@ function CandidateModal({
       >
         <div style={styles.modalHeader}>
           <div>
-            <h2 style={{ margin: 0 }}>{candidate.name || 'Untitled'}</h2>
+            <h2 style={styles.modalTitle}>{candidate.name || 'Untitled'}</h2>
             <p style={styles.modalSub}>{candidate.role || 'Role not set'}</p>
           </div>
           <button style={styles.closeBtn} onClick={onClose} aria-label="Close">
@@ -231,7 +305,10 @@ function CandidateModal({
         </div>
 
         <dl style={styles.meta}>
-          <Field label="Status" value={candidate.status || 'New'} />
+          <Field
+            label="Status"
+            value={<StatusPill stage={stage} status={candidate.status} />}
+          />
           {tUrl && (
             <Field
               label="Trello"
@@ -281,7 +358,7 @@ function CandidateModal({
               />
               <div style={styles.saveRow}>
                 <button
-                  style={styles.cleanBtn}
+                  style={styles.secondaryBtn}
                   onClick={handleClean}
                   disabled={cleaning || notes.trim().length === 0}
                 >
@@ -302,7 +379,7 @@ function CandidateModal({
                   <span
                     style={{
                       ...styles.saveMsg,
-                      color: saveMsg.startsWith('Error') ? '#b91c1c' : '#15803d',
+                      color: saveMsg.startsWith('Error') ? '#f87171' : '#34e5a0',
                     }}
                   >
                     {saveMsg}
@@ -355,7 +432,7 @@ function CandidateModal({
                   <span
                     style={{
                       ...styles.saveMsg,
-                      color: emailMsg.startsWith('Sent') ? '#15803d' : '#b91c1c',
+                      color: emailMsg.startsWith('Sent') ? '#34e5a0' : '#f87171',
                     }}
                   >
                     {emailMsg}
@@ -394,8 +471,8 @@ function CandidateModal({
                   style={{
                     ...styles.saveMsg,
                     color: resumeMsg.startsWith('Uploaded')
-                      ? '#15803d'
-                      : '#b91c1c',
+                      ? '#34e5a0'
+                      : '#f87171',
                   }}
                 >
                   {resumeMsg}
@@ -417,7 +494,7 @@ function CandidateModal({
                     Open LinkedIn profile ↗
                   </a>
                   <button
-                    style={styles.actionBtn}
+                    style={styles.secondaryBtn}
                     onClick={() => setSavedLinkedin('')}
                   >
                     Edit URL
@@ -445,8 +522,8 @@ function CandidateModal({
                         style={{
                           ...styles.saveMsg,
                           color: linkedinMsg.startsWith('Error')
-                            ? '#b91c1c'
-                            : '#15803d',
+                            ? '#f87171'
+                            : '#34e5a0',
                         }}
                       >
                         {linkedinMsg}
@@ -460,11 +537,11 @@ function CandidateModal({
         </div>
 
         <div style={styles.actionsRow}>
-          <button style={styles.actionBtn} onClick={() => stub('Log to Bullhorn')}>
+          <button style={styles.secondaryBtn} onClick={() => stub('Log to Bullhorn')}>
             📋 Log to Bullhorn
           </button>
           <button
-            style={styles.actionBtn}
+            style={styles.secondaryBtn}
             onClick={() => stub('Schedule follow-up')}
           >
             📅 Schedule follow-up
@@ -491,66 +568,115 @@ function Field({
   );
 }
 
+const FONT = "Inter, system-ui, -apple-system, sans-serif";
+
 const styles: Record<string, React.CSSProperties> = {
   page: {
+    minHeight: '100vh',
     padding: 40,
-    fontFamily: 'system-ui, sans-serif',
+    fontFamily: FONT,
     maxWidth: 1100,
     margin: '0 auto',
-    color: '#111827',
+    background: '#0f1115',
+    color: '#e8eaed',
+    fontWeight: 400,
   },
-  header: { display: 'flex', alignItems: 'baseline', gap: 12 },
-  h1: { margin: 0 },
-  count: { color: '#6b7280', fontSize: 14 },
-  grid: {
-    marginTop: 24,
+  header: {
+    display: 'flex',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  headerLeft: { display: 'flex', alignItems: 'baseline', gap: 12 },
+  h1: {
+    margin: 0,
+    fontSize: 20,
+    fontWeight: 500,
+    letterSpacing: '-0.01em',
+    color: '#e8eaed',
+  },
+  kicker: {
+    fontSize: 11,
+    textTransform: 'uppercase',
+    letterSpacing: '0.08em',
+    color: '#8b909c',
+    fontWeight: 400,
+  },
+  date: { fontSize: 13, color: '#8b909c', fontWeight: 400 },
+
+  statsBar: {
+    marginTop: 28,
     display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
-    gap: 16,
+    gridTemplateColumns: 'repeat(3, 1fr)',
+    gap: 14,
   },
-  card: {
-    border: '1px solid #e5e7eb',
-    borderRadius: 10,
-    padding: 16,
-    background: '#fff',
+  statCard: {
+    background: '#1a1d24',
+    border: '1px solid #262a33',
+    borderRadius: 14,
+    padding: '20px 22px',
     display: 'flex',
     flexDirection: 'column',
-    gap: 8,
+    gap: 6,
   },
-  cardTop: {
+  statValue: {
+    fontSize: 28,
+    fontWeight: 500,
+    color: '#34e5a0',
+    letterSpacing: '-0.01em',
+    lineHeight: 1,
+  },
+  statLabel: {
+    fontSize: 11,
+    textTransform: 'uppercase',
+    letterSpacing: '0.08em',
+    color: '#8b909c',
+    fontWeight: 400,
+  },
+
+  empty: { marginTop: 28, color: '#8b909c', fontSize: 14 },
+
+  list: {
+    marginTop: 28,
     display: 'flex',
+    flexDirection: 'column',
+    gap: 10,
+  },
+  card: {
+    background: '#1a1d24',
+    border: '1px solid #262a33',
+    borderRadius: 14,
+    padding: '14px 18px',
+    display: 'flex',
+    alignItems: 'center',
     justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    gap: 8,
-  },
-  name: { margin: 0, fontSize: 17 },
-  role: { margin: 0, color: '#6b7280', fontSize: 14 },
-  cardLinks: { display: 'flex', gap: 12, fontSize: 14 },
-  link: { color: '#2563eb', textDecoration: 'none' },
-  openBtn: {
-    marginTop: 8,
-    alignSelf: 'flex-start',
-    padding: '6px 14px',
-    border: '1px solid #d1d5db',
-    borderRadius: 6,
-    background: '#f9fafb',
+    gap: 12,
     cursor: 'pointer',
-    fontSize: 14,
   },
-  badge: {
-    fontSize: 12,
-    fontWeight: 600,
-    color: '#374151',
-    background: '#f3f4f6',
-    border: '1px solid #e5e7eb',
+  cardMain: { display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 },
+  name: {
+    margin: 0,
+    fontSize: 14,
+    fontWeight: 500,
+    color: '#e8eaed',
+    letterSpacing: '-0.01em',
+  },
+  role: { margin: 0, color: '#8b909c', fontSize: 12, fontWeight: 400 },
+  pill: {
+    fontSize: 10,
+    fontWeight: 500,
+    textTransform: 'uppercase',
+    letterSpacing: '0.06em',
     borderRadius: 999,
-    padding: '2px 10px',
+    padding: '4px 10px',
     whiteSpace: 'nowrap',
   },
+  link: { color: '#34e5a0', textDecoration: 'none' },
+
   overlay: {
     position: 'fixed',
     inset: 0,
-    background: 'rgba(0,0,0,0.4)',
+    background: 'rgba(0,0,0,0.6)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -558,165 +684,181 @@ const styles: Record<string, React.CSSProperties> = {
     zIndex: 50,
   },
   modal: {
-    background: '#fff',
-    borderRadius: 12,
+    background: '#1a1d24',
+    border: '1px solid #262a33',
+    borderRadius: 14,
     padding: 24,
     width: '100%',
-    maxWidth: 520,
+    maxWidth: 540,
     maxHeight: '90vh',
     overflowY: 'auto',
-    boxShadow: '0 10px 40px rgba(0,0,0,0.2)',
+    color: '#e8eaed',
+    fontFamily: FONT,
   },
   modalHeader: {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
   },
-  modalSub: { margin: '4px 0 0', color: '#6b7280', fontSize: 14 },
+  modalTitle: {
+    margin: 0,
+    fontSize: 18,
+    fontWeight: 500,
+    letterSpacing: '-0.01em',
+    color: '#e8eaed',
+  },
+  modalSub: { margin: '4px 0 0', color: '#8b909c', fontSize: 13 },
   closeBtn: {
     border: 'none',
     background: 'transparent',
-    fontSize: 18,
+    fontSize: 16,
     cursor: 'pointer',
-    color: '#6b7280',
+    color: '#8b909c',
+    lineHeight: 1,
+    padding: 4,
   },
   meta: {
     display: 'flex',
     flexWrap: 'wrap',
-    gap: 16,
-    margin: '16px 0',
+    gap: 20,
+    margin: '18px 0',
   },
   field: { margin: 0 },
   fieldLabel: {
     margin: 0,
-    fontSize: 12,
+    fontSize: 10,
     textTransform: 'uppercase',
-    letterSpacing: 0.4,
-    color: '#9ca3af',
+    letterSpacing: '0.08em',
+    color: '#5a5f6b',
+    fontWeight: 400,
   },
-  fieldValue: { margin: '2px 0 0', fontSize: 14 },
-  label: { fontSize: 13, fontWeight: 600, color: '#374151' },
+  fieldValue: { margin: '4px 0 0', fontSize: 13, color: '#e8eaed' },
+  label: {
+    fontSize: 11,
+    fontWeight: 400,
+    textTransform: 'uppercase',
+    letterSpacing: '0.06em',
+    color: '#5a5f6b',
+  },
   textarea: {
     width: '100%',
     marginTop: 6,
-    padding: 10,
-    border: '1px solid #d1d5db',
-    borderRadius: 8,
+    padding: 11,
+    background: '#0f1115',
+    border: '1px solid #262a33',
+    borderRadius: 10,
     fontFamily: 'inherit',
     fontSize: 14,
+    color: '#e8eaed',
     resize: 'vertical',
     boxSizing: 'border-box',
   },
-  saveRow: { display: 'flex', alignItems: 'center', gap: 12, marginTop: 10 },
+  saveRow: { display: 'flex', alignItems: 'center', gap: 12, marginTop: 12 },
   primaryBtn: {
-    padding: '8px 16px',
+    padding: '9px 18px',
     border: 'none',
-    borderRadius: 6,
-    background: '#111827',
-    color: '#fff',
+    borderRadius: 10,
+    background: '#34e5a0',
+    color: '#0f1115',
     cursor: 'pointer',
-    fontSize: 14,
+    fontSize: 13,
+    fontWeight: 500,
+    fontFamily: 'inherit',
+  },
+  secondaryBtn: {
+    padding: '9px 16px',
+    border: '1px solid #262a33',
+    borderRadius: 10,
+    background: 'transparent',
+    color: '#e8eaed',
+    cursor: 'pointer',
+    fontSize: 13,
+    fontWeight: 400,
+    fontFamily: 'inherit',
   },
   saveMsg: { fontSize: 13 },
-  cleanBtn: {
-    padding: '8px 16px',
-    border: '1px solid #111827',
-    borderRadius: 6,
-    background: '#fff',
-    color: '#111827',
-    cursor: 'pointer',
-    fontSize: 14,
-  },
-  cleanErrMsg: { marginTop: 10, fontSize: 13, color: '#b91c1c' },
+  cleanErrMsg: { marginTop: 12, fontSize: 13, color: '#f87171' },
   cleanedBox: {
-    marginTop: 14,
-    border: '1px solid #e5e7eb',
-    borderRadius: 8,
-    background: '#f9fafb',
+    marginTop: 16,
+    border: '1px solid #262a33',
+    borderRadius: 10,
+    background: '#0f1115',
     padding: 14,
   },
   cleanedLabel: {
-    fontSize: 12,
+    fontSize: 10,
     textTransform: 'uppercase',
-    letterSpacing: 0.4,
-    color: '#9ca3af',
+    letterSpacing: '0.08em',
+    color: '#5a5f6b',
     marginBottom: 8,
   },
   cleanedText: {
     fontSize: 14,
-    lineHeight: 1.5,
+    lineHeight: 1.55,
     whiteSpace: 'pre-wrap',
-    color: '#111827',
+    color: '#e8eaed',
   },
   actionsRow: {
     display: 'flex',
     flexWrap: 'wrap',
     gap: 8,
-    marginTop: 20,
-    borderTop: '1px solid #f3f4f6',
-    paddingTop: 16,
+    marginTop: 22,
+    borderTop: '1px solid #262a33',
+    paddingTop: 18,
   },
-  actionBtn: {
-    padding: '8px 12px',
-    border: '1px solid #d1d5db',
-    borderRadius: 6,
-    background: '#fff',
-    cursor: 'pointer',
-    fontSize: 13,
-  },
-  actionMsg: { marginTop: 10, fontSize: 13, color: '#6b7280' },
-  composeBox: {
-    marginTop: 14,
-    border: '1px solid #e5e7eb',
-    borderRadius: 8,
-    padding: 14,
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 6,
-  },
+  actionMsg: { marginTop: 12, fontSize: 13, color: '#8b909c' },
   input: {
-    padding: 8,
-    border: '1px solid #d1d5db',
-    borderRadius: 6,
+    marginTop: 6,
+    padding: 10,
+    background: '#0f1115',
+    border: '1px solid #262a33',
+    borderRadius: 10,
     fontFamily: 'inherit',
     fontSize: 14,
+    color: '#e8eaed',
     boxSizing: 'border-box',
   },
   tabBar: {
-    display: 'flex',
-    gap: 4,
-    borderBottom: '1px solid #e5e7eb',
-    marginBottom: 16,
+    display: 'grid',
+    gridTemplateColumns: 'repeat(4, 1fr)',
+    gap: 6,
+    marginBottom: 18,
   },
   tab: {
-    padding: '8px 12px',
-    border: 'none',
-    borderBottom: '2px solid transparent',
-    background: 'transparent',
+    padding: '9px 8px',
+    border: '1px solid #262a33',
+    borderRadius: 10,
+    background: '#23272f',
     cursor: 'pointer',
-    fontSize: 14,
-    color: '#6b7280',
+    fontSize: 13,
+    fontWeight: 400,
+    fontFamily: 'inherit',
+    color: '#8b909c',
+    textAlign: 'center',
   },
   tabActive: {
-    padding: '8px 12px',
-    border: 'none',
-    borderBottom: '2px solid #111827',
-    background: 'transparent',
+    padding: '9px 8px',
+    border: '1px solid rgba(52, 229, 160, 0.4)',
+    borderRadius: 10,
+    background: 'rgba(52, 229, 160, 0.12)',
     cursor: 'pointer',
-    fontSize: 14,
-    fontWeight: 600,
-    color: '#111827',
+    fontSize: 13,
+    fontWeight: 500,
+    fontFamily: 'inherit',
+    color: '#34e5a0',
+    textAlign: 'center',
   },
-  tabContent: { minHeight: 130 },
+  tabContent: { minHeight: 140 },
   sectionCol: { display: 'flex', flexDirection: 'column', gap: 6 },
   openProfileBtn: {
     display: 'inline-block',
     alignSelf: 'flex-start',
-    padding: '8px 16px',
-    borderRadius: 6,
-    background: '#0a66c2',
-    color: '#fff',
+    padding: '9px 18px',
+    borderRadius: 10,
+    background: '#34e5a0',
+    color: '#0f1115',
     textDecoration: 'none',
-    fontSize: 14,
+    fontSize: 13,
+    fontWeight: 500,
   },
 };
