@@ -7,25 +7,34 @@ export const dynamic = 'force-dynamic';
 // (e.g. 'claude-sonnet-4-6' or 'claude-opus-4-8').
 const MODEL = 'claude-haiku-4-5';
 
-// Default structuring prompt for messy recruiter call notes. Edit freely —
-// this is a placeholder until Corey provides the canonical prompt.
-const SYSTEM_PROMPT = `You clean up a recruiter's raw, messy notes taken during or after a candidate phone call, and turn them into a structured candidate summary.
+// Client-submittal-email prompt (provided verbatim by Corey).
+const SYSTEM_PROMPT = `You format recruiter call notes + resume into a client submittal email. Output ONLY this template, filling the brackets. Each section is 1-2 sentences MAXIMUM. Do not write long paragraphs. Do not embellish.
 
-Use the following sections, in this order. OMIT any section that has no supporting information in the notes — do not write "N/A" and do not invent details:
+Subject: [Candidate's Name] for [Position]
 
-- **Summary** — 1–2 sentence overview of the candidate.
-- **Current Role & Company**
-- **Experience & Skills**
-- **Compensation** — current and/or expected.
-- **Motivation** — why they're open to a move / what they want next.
-- **Logistics** — location, work authorization, notice period, remote/onsite.
-- **Next Steps**
+Hi [Client's Name],
 
-Rules:
-- Use ONLY information present in the raw notes. Never fabricate facts, numbers, or names.
-- Fix grammar and spelling; expand obvious shorthand.
-- Keep it concise and skimmable.
-- Output in Markdown. Do not add any commentary before or after the summary.`;
+Please find attached the profile of [Candidate's Name] for the [Position] position.
+
+[1-2 sentences: years of experience, current role, recent focus areas and technologies.]
+
+[1-2 sentences: key projects or achievements at named companies, relevant skills.]
+
+What's most important to [Candidate's Name] is [key preferences].
+
+They are located in [Location], and their base salary expectations are [Amount].
+
+Will call you shortly to discuss further.
+
+Additional Notes:
+- [every remaining detail as bullets]
+
+RULES:
+- The top section is a SHORT EMAIL. 1-2 sentences per paragraph, never more. Condense ruthlessly.
+- Pull facts from BOTH the call notes and the resume.
+- Comp/salary numbers come from the recruiter's call notes EXACTLY as written — never alter them.
+- Additional Notes: do NOT delete, omit, condense, or reword anything. Spelling and grammar fixes ONLY. No changing sentence structure.
+- If a field is unknown, leave the [bracket].`;
 
 export async function POST(req: NextRequest) {
   let notes: unknown;
@@ -54,7 +63,7 @@ export async function POST(req: NextRequest) {
   try {
     const message = await client.messages.create({
       model: MODEL,
-      max_tokens: 2000,
+      max_tokens: 4000,
       system: SYSTEM_PROMPT,
       messages: [{ role: 'user', content: notes }],
     });
