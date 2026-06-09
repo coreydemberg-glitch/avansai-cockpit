@@ -6,6 +6,7 @@ export type Candidate = {
   email: string | null;
   role: string | null;
   linkedin_url: string | null;
+  resume: string | null;
   trello_card_id: string | null;
   notes: string | null;
   status: string | null;

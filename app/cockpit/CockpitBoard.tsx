@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from 'react';
 import type { Candidate } from './types';
-import { saveNotes } from './actions';
+import { saveNotes, saveLinkedin } from './actions';
 
 const trelloUrl = (cardId: string | null) =>
   cardId ? `https://trello.com/c/${cardId}` : null;
@@ -109,7 +109,6 @@ function CandidateModal({
     }
   };
 
-  const [composing, setComposing] = useState(false);
   const [emailTo, setEmailTo] = useState(candidate.email ?? '');
   const [emailSubject, setEmailSubject] = useState('');
   const [emailBody, setEmailBody] = useState('');
@@ -131,8 +130,7 @@ function CandidateModal({
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to send');
-      setComposing(false);
-      setActionMsg('✉️ Email sent');
+      setEmailMsg('Sent ✓');
     } catch (e) {
       setEmailMsg(e instanceof Error ? e.message : 'Failed to send');
     } finally {
@@ -147,6 +145,65 @@ function CandidateModal({
       setSaveMsg(res.ok ? 'Saved' : `Error: ${res.error ?? 'unknown'}`);
     });
   };
+
+  // Resume upload
+  const [resumeUrl, setResumeUrl] = useState<string | null>(
+    candidate.resume ?? null
+  );
+  const [uploading, setUploading] = useState(false);
+  const [resumeMsg, setResumeMsg] = useState<string | null>(null);
+
+  const handleResume = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setResumeMsg(null);
+    setUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append('candidateId', candidate.id);
+      fd.append('file', file);
+      const res = await fetch('/api/upload-resume', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Upload failed');
+      setResumeUrl(data.url);
+      setResumeMsg('Uploaded ✓');
+    } catch (err) {
+      setResumeMsg(err instanceof Error ? err.message : 'Upload failed');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  // LinkedIn
+  const [linkedin, setLinkedin] = useState(candidate.linkedin_url ?? '');
+  const [savedLinkedin, setSavedLinkedin] = useState(
+    candidate.linkedin_url ?? ''
+  );
+  const [linkedinSaving, setLinkedinSaving] = useState(false);
+  const [linkedinMsg, setLinkedinMsg] = useState<string | null>(null);
+
+  const handleSaveLinkedin = async () => {
+    setLinkedinMsg(null);
+    setLinkedinSaving(true);
+    const res = await saveLinkedin(candidate.id, linkedin.trim());
+    if (res.ok) {
+      setSavedLinkedin(linkedin.trim());
+      setLinkedinMsg('Saved ✓');
+    } else {
+      setLinkedinMsg(`Error: ${res.error ?? 'unknown'}`);
+    }
+    setLinkedinSaving(false);
+  };
+
+  const [activeTab, setActiveTab] = useState<
+    'email' | 'notes' | 'resume' | 'linkedin'
+  >('notes');
+  const resumeName = resumeUrl
+    ? decodeURIComponent(resumeUrl.split('/').pop() || 'resume').replace(
+        /^\d+-/,
+        ''
+      )
+    : null;
 
   // Action buttons are stubs for now — wired to clear feedback so the flow is
   // visible. Real integrations (Gmail, Bullhorn, calendar) come next.
@@ -175,21 +232,6 @@ function CandidateModal({
 
         <dl style={styles.meta}>
           <Field label="Status" value={candidate.status || 'New'} />
-          {candidate.linkedin_url && (
-            <Field
-              label="LinkedIn"
-              value={
-                <a
-                  href={candidate.linkedin_url}
-                  target="_blank"
-                  rel="noreferrer"
-                  style={styles.link}
-                >
-                  Profile ↗
-                </a>
-              }
-            />
-          )}
           {tUrl && (
             <Field
               label="Trello"
@@ -207,53 +249,217 @@ function CandidateModal({
           )}
         </dl>
 
-        <label style={styles.label}>Notes</label>
-        <textarea
-          style={styles.textarea}
-          value={notes}
-          onChange={(e) => setNotes(e.target.value)}
-          placeholder="Add notes about this candidate…"
-          rows={5}
-        />
-        <div style={styles.saveRow}>
-          <button
-            style={styles.cleanBtn}
-            onClick={handleClean}
-            disabled={cleaning || notes.trim().length === 0}
-          >
-            {cleaning ? 'Cleaning…' : cleaned ? 'Re-clean notes' : 'Clean notes'}
-          </button>
-          <button
-            style={styles.primaryBtn}
-            onClick={handleSave}
-            disabled={isPending}
-          >
-            {isPending ? 'Saving…' : 'Save notes'}
-          </button>
-          {saveMsg && (
-            <span
-              style={{
-                ...styles.saveMsg,
-                color: saveMsg.startsWith('Error') ? '#b91c1c' : '#15803d',
-              }}
+        <div style={styles.tabBar}>
+          {(
+            [
+              { key: 'email', label: '✉️ Email' },
+              { key: 'notes', label: '📝 Notes' },
+              { key: 'resume', label: '📄 Resume' },
+              { key: 'linkedin', label: '🔗 LinkedIn' },
+            ] as const
+          ).map((t) => (
+            <button
+              key={t.key}
+              onClick={() => setActiveTab(t.key)}
+              style={activeTab === t.key ? styles.tabActive : styles.tab}
             >
-              {saveMsg}
-            </span>
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        <div style={styles.tabContent}>
+          {activeTab === 'notes' && (
+            <>
+              <label style={styles.label}>Notes</label>
+              <textarea
+                style={styles.textarea}
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                placeholder="Add notes about this candidate…"
+                rows={5}
+              />
+              <div style={styles.saveRow}>
+                <button
+                  style={styles.cleanBtn}
+                  onClick={handleClean}
+                  disabled={cleaning || notes.trim().length === 0}
+                >
+                  {cleaning
+                    ? 'Cleaning…'
+                    : cleaned
+                    ? 'Re-clean notes'
+                    : 'Clean notes'}
+                </button>
+                <button
+                  style={styles.primaryBtn}
+                  onClick={handleSave}
+                  disabled={isPending}
+                >
+                  {isPending ? 'Saving…' : 'Save notes'}
+                </button>
+                {saveMsg && (
+                  <span
+                    style={{
+                      ...styles.saveMsg,
+                      color: saveMsg.startsWith('Error') ? '#b91c1c' : '#15803d',
+                    }}
+                  >
+                    {saveMsg}
+                  </span>
+                )}
+              </div>
+              {cleanErr && <p style={styles.cleanErrMsg}>{cleanErr}</p>}
+              {cleaned !== null && (
+                <div style={styles.cleanedBox}>
+                  <div style={styles.cleanedLabel}>Structured (AI cleanup)</div>
+                  <div style={styles.cleanedText}>{cleaned}</div>
+                </div>
+              )}
+            </>
+          )}
+
+          {activeTab === 'email' && (
+            <div style={styles.sectionCol}>
+              <label style={styles.label}>To</label>
+              <input
+                style={styles.input}
+                value={emailTo}
+                onChange={(e) => setEmailTo(e.target.value)}
+                placeholder="candidate@email.com"
+              />
+              <label style={styles.label}>Subject</label>
+              <input
+                style={styles.input}
+                value={emailSubject}
+                onChange={(e) => setEmailSubject(e.target.value)}
+                placeholder="Subject"
+              />
+              <label style={styles.label}>Body</label>
+              <textarea
+                style={styles.textarea}
+                rows={5}
+                value={emailBody}
+                onChange={(e) => setEmailBody(e.target.value)}
+                placeholder="Message…"
+              />
+              <div style={styles.saveRow}>
+                <button
+                  style={styles.primaryBtn}
+                  onClick={handleSend}
+                  disabled={sending || !emailTo}
+                >
+                  {sending ? 'Sending…' : 'Send'}
+                </button>
+                {emailMsg && (
+                  <span
+                    style={{
+                      ...styles.saveMsg,
+                      color: emailMsg.startsWith('Sent') ? '#15803d' : '#b91c1c',
+                    }}
+                  >
+                    {emailMsg}
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'resume' && (
+            <div style={styles.sectionCol}>
+              <label style={styles.label}>Resume (PDF or image)</label>
+              <input
+                type="file"
+                accept="application/pdf,image/*"
+                onChange={handleResume}
+                disabled={uploading}
+                style={styles.input}
+              />
+              {uploading && <span style={styles.actionMsg}>Uploading…</span>}
+              {resumeUrl && (
+                <p style={styles.fieldValue}>
+                  📄{' '}
+                  <a
+                    href={resumeUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={styles.link}
+                  >
+                    {resumeName}
+                  </a>
+                </p>
+              )}
+              {resumeMsg && (
+                <span
+                  style={{
+                    ...styles.saveMsg,
+                    color: resumeMsg.startsWith('Uploaded')
+                      ? '#15803d'
+                      : '#b91c1c',
+                  }}
+                >
+                  {resumeMsg}
+                </span>
+              )}
+            </div>
+          )}
+
+          {activeTab === 'linkedin' && (
+            <div style={styles.sectionCol}>
+              {savedLinkedin ? (
+                <>
+                  <a
+                    href={savedLinkedin}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={styles.openProfileBtn}
+                  >
+                    Open LinkedIn profile ↗
+                  </a>
+                  <button
+                    style={styles.actionBtn}
+                    onClick={() => setSavedLinkedin('')}
+                  >
+                    Edit URL
+                  </button>
+                </>
+              ) : (
+                <>
+                  <label style={styles.label}>Add LinkedIn</label>
+                  <input
+                    style={styles.input}
+                    value={linkedin}
+                    onChange={(e) => setLinkedin(e.target.value)}
+                    placeholder="https://www.linkedin.com/in/…"
+                  />
+                  <div style={styles.saveRow}>
+                    <button
+                      style={styles.primaryBtn}
+                      onClick={handleSaveLinkedin}
+                      disabled={linkedinSaving || !linkedin.trim()}
+                    >
+                      {linkedinSaving ? 'Saving…' : 'Save LinkedIn'}
+                    </button>
+                    {linkedinMsg && (
+                      <span
+                        style={{
+                          ...styles.saveMsg,
+                          color: linkedinMsg.startsWith('Error')
+                            ? '#b91c1c'
+                            : '#15803d',
+                        }}
+                      >
+                        {linkedinMsg}
+                      </span>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
           )}
         </div>
 
-        {cleanErr && <p style={styles.cleanErrMsg}>{cleanErr}</p>}
-        {cleaned !== null && (
-          <div style={styles.cleanedBox}>
-            <div style={styles.cleanedLabel}>Structured (AI cleanup)</div>
-            <div style={styles.cleanedText}>{cleaned}</div>
-          </div>
-        )}
-
         <div style={styles.actionsRow}>
-          <button style={styles.actionBtn} onClick={() => setComposing(true)}>
-            ✉️ Email candidate
-          </button>
           <button style={styles.actionBtn} onClick={() => stub('Log to Bullhorn')}>
             📋 Log to Bullhorn
           </button>
@@ -265,50 +471,6 @@ function CandidateModal({
           </button>
         </div>
         {actionMsg && <p style={styles.actionMsg}>{actionMsg}</p>}
-
-        {composing && (
-          <div style={styles.composeBox}>
-            <label style={styles.label}>To</label>
-            <input
-              style={styles.input}
-              value={emailTo}
-              onChange={(e) => setEmailTo(e.target.value)}
-              placeholder="candidate@email.com"
-            />
-            <label style={styles.label}>Subject</label>
-            <input
-              style={styles.input}
-              value={emailSubject}
-              onChange={(e) => setEmailSubject(e.target.value)}
-              placeholder="Subject"
-            />
-            <label style={styles.label}>Body</label>
-            <textarea
-              style={styles.textarea}
-              rows={5}
-              value={emailBody}
-              onChange={(e) => setEmailBody(e.target.value)}
-              placeholder="Message…"
-            />
-            <div style={styles.saveRow}>
-              <button
-                style={styles.primaryBtn}
-                onClick={handleSend}
-                disabled={sending || !emailTo}
-              >
-                {sending ? 'Sending…' : 'Send'}
-              </button>
-              <button style={styles.actionBtn} onClick={() => setComposing(false)}>
-                Cancel
-              </button>
-              {emailMsg && (
-                <span style={{ ...styles.saveMsg, color: '#b91c1c' }}>
-                  {emailMsg}
-                </span>
-              )}
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );
@@ -519,5 +681,42 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: 'inherit',
     fontSize: 14,
     boxSizing: 'border-box',
+  },
+  tabBar: {
+    display: 'flex',
+    gap: 4,
+    borderBottom: '1px solid #e5e7eb',
+    marginBottom: 16,
+  },
+  tab: {
+    padding: '8px 12px',
+    border: 'none',
+    borderBottom: '2px solid transparent',
+    background: 'transparent',
+    cursor: 'pointer',
+    fontSize: 14,
+    color: '#6b7280',
+  },
+  tabActive: {
+    padding: '8px 12px',
+    border: 'none',
+    borderBottom: '2px solid #111827',
+    background: 'transparent',
+    cursor: 'pointer',
+    fontSize: 14,
+    fontWeight: 600,
+    color: '#111827',
+  },
+  tabContent: { minHeight: 130 },
+  sectionCol: { display: 'flex', flexDirection: 'column', gap: 6 },
+  openProfileBtn: {
+    display: 'inline-block',
+    alignSelf: 'flex-start',
+    padding: '8px 16px',
+    borderRadius: 6,
+    background: '#0a66c2',
+    color: '#fff',
+    textDecoration: 'none',
+    fontSize: 14,
   },
 };
