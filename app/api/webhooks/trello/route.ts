@@ -24,13 +24,14 @@ function extractLinkedin(text: unknown): string | null {
 }
 
 // Membership gate: a card only belongs in the cockpit when Corey is a member.
-// We identify "Corey" from the webhook action's target member. Most reliable is
-// a Trello member id or username supplied via env; if neither is set we fall
-// back to matching the full name. Configure in Vercel to pin it exactly:
-//   TRELLO_MEMBER_ID=<your trello member id>      (best)
-//   TRELLO_MEMBER_USERNAME=<your trello username>
-const WANT_ID = process.env.TRELLO_MEMBER_ID?.trim() || null;
-const WANT_USERNAME = process.env.TRELLO_MEMBER_USERNAME?.trim().toLowerCase() || null;
+// We identify "Corey" from the webhook action's target member, matching on (in
+// priority order) Trello member id → username → full name. The id is pinned by
+// default below — it's immutable, so the match survives a rename. Each can be
+// overridden via env (TRELLO_MEMBER_ID / _USERNAME / _NAME) without a code change.
+const WANT_ID = process.env.TRELLO_MEMBER_ID?.trim() || '5e024a57b973f7014fc03e63';
+const WANT_USERNAME = (
+  process.env.TRELLO_MEMBER_USERNAME?.trim() || 'coreydemberg'
+).toLowerCase();
 const WANT_NAME = (process.env.TRELLO_MEMBER_NAME?.trim() || 'Corey Demberg').toLowerCase();
 
 // Decide whether the member affected by a member-add/-remove action is Corey.
@@ -44,14 +45,14 @@ function actionTargetsCorey(action: any): boolean {
     ''
   ).toLowerCase();
 
-  if (WANT_ID && id === WANT_ID) return true;
+  if (WANT_ID && id && id === WANT_ID) return true;
   if (WANT_USERNAME && username && username === WANT_USERNAME) return true;
 
-  // Name fallback only when no precise id/username is configured.
-  if (!WANT_ID && !WANT_USERNAME && fullName) {
+  // Name as a last-resort signal (some action variants carry only fullName).
+  if (WANT_NAME && fullName) {
     // Tolerate "corey demberg" in any order / with extra parts.
     const parts = WANT_NAME.split(/\s+/).filter(Boolean);
-    return parts.every((p) => fullName.includes(p));
+    if (parts.length && parts.every((p) => fullName.includes(p))) return true;
   }
   return false;
 }
@@ -85,6 +86,118 @@ function isMissingArchivedColumn(error: {
     error?.code === 'PGRST204' ||
     /archived/i.test(error?.message ?? '')
   );
+}
+
+// ── Funnel timeline (build spec §3/§4) ────────────────────────────────────
+// Stage advancement is driven by the candidate's Trello column. We map the
+// column name → funnel state and the action it surfaces, then mirror that onto
+// the candidate row + the action_items table the funnel panel reads from.
+
+type FunnelEntry = {
+  // Omit `stage` to leave funnel_stage unchanged (e.g. DQ keeps the stage the
+  // candidate exited from; it just flips the `dq` flag).
+  stage?: number;
+  pending: boolean;
+  dq: boolean;
+  // The to-do surfaced when a candidate enters this column, if any. `prep` also
+  // re-arms the amber segment (prep_sent → false) since new prep is owed.
+  action?: 'prep' | 'feedback' | 'thankyou';
+};
+
+// Trello list name (lower-cased, trimmed) → funnel state. Names per spec §3 —
+// edit HERE if the board's columns are renamed. Identified + Call Schedule
+// intentionally collapse into one cockpit stage. Stage 1's job-description email
+// is the existing manual Step-1 flow, so it surfaces no auto action item.
+const LIST_TO_FUNNEL: Record<string, FunnelEntry> = {
+  identified: { stage: 1, pending: false, dq: false },
+  'call schedule': { stage: 1, pending: false, dq: false },
+  presented: { stage: 2, pending: false, dq: false, action: 'prep' }, // R1 interview prep
+  pending: { stage: 2, pending: true, dq: false, action: 'feedback' }, // capture R1 feedback
+  mon: { stage: 3, pending: false, dq: false, action: 'prep' }, // R2 / manager prep
+  tue: { stage: 3, pending: false, dq: false, action: 'prep' },
+  wed: { stage: 3, pending: false, dq: false, action: 'prep' },
+  thu: { stage: 3, pending: false, dq: false, action: 'prep' },
+  fri: { stage: 3, pending: false, dq: false, action: 'prep' },
+  dq: { pending: false, dq: true, action: 'thankyou' }, // thank-you email
+};
+
+// The list a card is in. List moves arrive as updateCard with listAfter; other
+// actions (member add, content edits) carry the current list as `list`.
+function listNameFromAction(action: any): string | null {
+  const name: unknown =
+    action?.data?.listAfter?.name ?? action?.data?.list?.name;
+  return typeof name === 'string' && name.trim() ? name : null;
+}
+
+// True when the funnel columns / action_items table aren't present yet (i.e. the
+// 0002 migration hasn't been run). Lets the webhook keep 200-ing pre-migration.
+function isMissingFunnelSchema(error: {
+  code?: string;
+  message?: string;
+}): boolean {
+  return (
+    error?.code === '42703' || // undefined_column
+    error?.code === '42P01' || // undefined_table
+    error?.code === 'PGRST204' || // column not found (schema cache)
+    error?.code === 'PGRST205' || // table not found (schema cache)
+    /funnel_stage|prep_sent|\bpending\b|\bdq\b|action_items/i.test(
+      error?.message ?? ''
+    )
+  );
+}
+
+// Best-effort: mirror a card's Trello column onto its candidate row + ensure the
+// matching open action item exists. Never throws — a DB that hasn't had the 0002
+// migration applied just logs a warning so the webhook still returns 200 (Trello
+// retries non-2xx). No-ops for unmapped columns and cards not in the cockpit.
+async function syncFunnel(cardId: string, listName: string | null) {
+  if (!cardId || !listName) return;
+  const entry = LIST_TO_FUNNEL[listName.trim().toLowerCase()];
+  if (!entry) return; // column not part of the funnel → leave state untouched
+
+  const patch: Record<string, unknown> = {
+    pending: entry.pending,
+    dq: entry.dq,
+  };
+  if (entry.stage != null) patch.funnel_stage = entry.stage;
+  // Entering a prep stage re-arms the amber segment; a new prep is owed.
+  if (entry.action === 'prep') patch.prep_sent = false;
+
+  const { data, error } = await supabase
+    .from('candidates')
+    .update(patch)
+    .eq('trello_card_id', cardId)
+    .select('id')
+    .maybeSingle();
+
+  if (error) {
+    if (isMissingFunnelSchema(error)) {
+      console.warn(
+        'Funnel columns missing — skipping funnel sync. Run supabase/migrations/0002_funnel.sql'
+      );
+      return;
+    }
+    console.error('Funnel sync failed:', error);
+    return;
+  }
+  if (!data?.id) return; // card isn't in the cockpit (no matching candidate)
+
+  if (entry.action) {
+    // Insert the to-do; the partial unique index keeps at most one OPEN item per
+    // (candidate, type), so a re-fired move is a harmless no-op (23505 ignored).
+    const { error: aiErr } = await supabase
+      .from('action_items')
+      .insert({ candidate_id: data.id, type: entry.action, status: 'open' });
+    if (aiErr && aiErr.code !== '23505') {
+      if (isMissingFunnelSchema(aiErr)) {
+        console.warn(
+          'action_items table missing — skipping. Run supabase/migrations/0002_funnel.sql'
+        );
+      } else {
+        console.error('Failed to insert action item:', aiErr);
+      }
+    }
+  }
 }
 
 export async function HEAD() {
@@ -127,6 +240,8 @@ export async function POST(req: NextRequest) {
         { status: 500 }
       );
     }
+    // Place the candidate on the funnel from whichever column the card sits in.
+    await syncFunnel(card?.id, listNameFromAction(action));
     return NextResponse.json({ success: true });
   }
 
@@ -178,6 +293,9 @@ export async function POST(req: NextRequest) {
         );
       }
     }
+    // A column move (data.listAfter) advances the candidate along the funnel;
+    // no-ops for content-only edits and cards not in the cockpit.
+    await syncFunnel(card?.id, listNameFromAction(action));
     return NextResponse.json({ success: true });
   }
 
