@@ -10,6 +10,9 @@ export type Candidate = {
   trello_card_id: string | null;
   notes: string | null;
   status: string | null;
+  // Hidden from the cockpit when Corey is removed from the Trello card.
+  // Recoverable: the row stays; re-adding him on Trello sets this back to false.
+  archived?: boolean | null;
 };
 
 // A row in `job_descriptions`. `file_path` is the object path within the

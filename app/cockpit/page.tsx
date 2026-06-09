@@ -16,7 +16,12 @@ export default async function CockpitPage() {
     listJobDescriptions(),
   ]);
 
-  const candidates = (candidatesRes.data ?? []) as Candidate[];
+  // Hide archived candidates (Corey was removed from the Trello card). Filtered
+  // in JS rather than in the query so the cockpit keeps working even before the
+  // `archived` column exists in the DB.
+  const candidates = ((candidatesRes.data ?? []) as Candidate[]).filter(
+    (c) => !c.archived
+  );
   const loadError =
     [candidatesRes.error?.message, jobsRes.error].filter(Boolean).join(' · ') ||
     null;
