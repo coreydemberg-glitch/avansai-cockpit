@@ -15,6 +15,14 @@ const supabase = createClient(supabaseUrl, supabaseServiceRoleKey, {
   auth: { persistSession: false },
 });
 
+// Pull the first LinkedIn URL out of free text (card description), if any.
+// Matches both /in/ profiles and /talent/ recruiter links.
+function extractLinkedin(text: unknown): string | null {
+  if (typeof text !== 'string') return null;
+  const m = text.match(/https?:\/\/(?:[a-z0-9-]+\.)?linkedin\.com\/[^\s)]+/i);
+  return m ? m[0] : null;
+}
+
 export async function HEAD() {
   return new NextResponse(null, { status: 200 });
 }
@@ -25,17 +33,23 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
+  const action = body?.action;
 
-  if (body.action && body.action.type === 'createCard') {
-    const card = body.action.data.card;
+  // New card → create the candidate (and capture a LinkedIn URL if the
+  // description was already set at creation time).
+  if (action?.type === 'createCard') {
+    const card = action.data.card;
+    const linkedin = extractLinkedin(card.desc);
 
-    const { error } = await supabase.from('candidates').upsert(
-      {
-        name: card.name,
-        trello_card_id: card.id,
-      },
-      { onConflict: 'trello_card_id' }
-    );
+    const row: Record<string, unknown> = {
+      name: card.name,
+      trello_card_id: card.id,
+    };
+    if (linkedin) row.linkedin_url = linkedin;
+
+    const { error } = await supabase
+      .from('candidates')
+      .upsert(row, { onConflict: 'trello_card_id' });
 
     if (error) {
       console.error('Failed to insert candidate:', error);
@@ -44,7 +58,27 @@ export async function POST(req: NextRequest) {
         { status: 500 }
       );
     }
+    return NextResponse.json({ success: true });
+  }
 
+  // Card edited → if the description now contains a LinkedIn URL, sync it
+  // onto the matching candidate.
+  if (action?.type === 'updateCard') {
+    const card = action.data.card;
+    const linkedin = extractLinkedin(card?.desc);
+    if (linkedin) {
+      const { error } = await supabase
+        .from('candidates')
+        .update({ linkedin_url: linkedin })
+        .eq('trello_card_id', card.id);
+      if (error) {
+        console.error('Failed to update linkedin_url:', error);
+        return NextResponse.json(
+          { success: false, error: error.message },
+          { status: 500 }
+        );
+      }
+    }
     return NextResponse.json({ success: true });
   }
 
