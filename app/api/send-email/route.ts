@@ -23,7 +23,8 @@ export async function POST(req: NextRequest) {
   }
 
   const user = process.env.GMAIL_USER;
-  const pass = process.env.GMAIL_PASSWORD;
+  // Gmail shows app passwords in 4-char groups with spaces; strip them.
+  const pass = process.env.GMAIL_PASSWORD?.replace(/\s+/g, '');
   if (!user || !pass) {
     return NextResponse.json(
       { error: 'GMAIL_USER / GMAIL_PASSWORD not configured on the server.' },
