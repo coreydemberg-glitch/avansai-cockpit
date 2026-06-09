@@ -35,17 +35,6 @@ export async function POST(req: NextRequest) {
   const body = await req.json();
   const action = body?.action;
 
-  // TEMP diagnostic: log every inbound Trello action so we can see the exact
-  // payload shape (esp. updateCard description edits).
-  console.log(
-    'TRELLO_WEBHOOK',
-    JSON.stringify({
-      type: action?.type,
-      cardKeys: action?.data?.card ? Object.keys(action.data.card) : null,
-      desc: action?.data?.card?.desc ?? null,
-    })
-  );
-
   // New card → create the candidate (and capture a LinkedIn URL if the
   // description was already set at creation time).
   if (action?.type === 'createCard') {
