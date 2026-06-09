@@ -24,8 +24,6 @@ What's most important to [Candidate's Name] is [key preferences].
 
 They are located in [Location], and their base salary expectations are [Amount].
 
-Will call you shortly to discuss further.
-
 Additional Notes:
 - [every remaining detail as bullets]
 
