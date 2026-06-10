@@ -23,8 +23,15 @@ function isMissingFunnelSchema(error: {
   );
 }
 
-// Open manual to-dos for the right-hand sidebar, newest first. Returns [] (not
+// Open manual to-dos for the cockpit-home sidebar, newest first. Returns [] (not
 // an error) when the schema isn't applied yet, so the panel still renders.
+//
+// Scoped to candidate-LESS rows (candidate_id IS NULL): these are the recruiter's
+// free-text home reminders. The Candidates hub raises its own manual to-dos WITH
+// a candidate_id (see app/cockpit/candidates/actions.ts), and those belong only
+// in the hub rail — excluding them here keeps the home command-center list from
+// being flooded by per-candidate note/résumé signals. `.is(... , null)` (not
+// `.eq`) is the correct PostgREST predicate for SQL NULL.
 export async function listManualActionItems(): Promise<{
   ok: boolean;
   items: ActionItem[];
@@ -36,6 +43,7 @@ export async function listManualActionItems(): Promise<{
     .select('*')
     .eq('type', 'manual')
     .eq('status', 'open')
+    .is('candidate_id', null)
     .order('created_at', { ascending: false });
 
   if (error) {

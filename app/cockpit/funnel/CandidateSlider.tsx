@@ -1,16 +1,24 @@
 'use client';
 
-// Candidate row with the 1.0 → 8.0 stage slider (slider build §3). The slider IS
-// the control: drag a candidate's progression and the green fill + readout update
-// live, then snap cleanly to the nearest half-step the instant you release.
-// Whole numbers = stage reached (dotted), half-steps = prep state (auto-pops the
-// Prep modal). Moves freely left and right. Built on pointer events (not a native
-// range) so the "continuous while dragging, snap on release" behaviour is exact
-// and the thumb/fill match the matrix aesthetic with plain inline styles.
+// Candidate BAR (Candidates Hub build §3) with the 1.0 → 8.0 stage slider (slider
+// build §3). The slider IS the control: drag a candidate's progression and the
+// green fill + readout update live, then snap cleanly to the nearest half-step the
+// instant you release. Whole numbers = stage reached (dotted), half-steps = prep
+// state (auto-pops the Prep modal). Moves freely left and right. Built on pointer
+// events (not a native range) so the "continuous while dragging, snap on release"
+// behaviour is exact and the thumb/fill match the matrix aesthetic.
+//
+// In the Candidates hub the bar grows three trailing icons — LinkedIn (links to
+// the profile), Notes (opens the chat/notes dropdown), Résumé (opens the file) —
+// and clicking the bar's identity toggles that same notes dropdown (§4). Lit
+// green when a note or résumé is on file (the §3 "signal").
 import { useEffect, useRef, useState } from 'react';
 import type { Candidate } from '../types';
 import { C, STATUS, FONT, GLOW, RADIUS, BORDER } from './tokens';
 import { sliderValue, snapHalf, fraction, valueFromFraction, stageReadout, MIN, MAX } from './stage';
+
+const httpUrl = (u: string | null | undefined): string | null =>
+  u && /^https?:\/\//i.test(u) ? u : null;
 
 export default function CandidateRow({
   candidate,
@@ -18,15 +26,28 @@ export default function CandidateRow({
   onOpenDetail,
   onArchive,
   archived = false,
+  onToggleChat,
+  chatOpen = false,
 }: {
   candidate: Candidate;
   onCommit: (c: Candidate, value: number) => void;
   onOpenDetail: (c: Candidate) => void;
   onArchive: (c: Candidate, archived: boolean) => void;
   archived?: boolean;
+  // Candidates-hub mode: when provided, the identity + Notes icon toggle the
+  // notes/chat dropdown instead of opening the detail modal.
+  onToggleChat?: (c: Candidate) => void;
+  chatOpen?: boolean;
 }) {
   const committed = sliderValue(candidate);
   const prepSent = !!candidate.prep_sent;
+
+  // Candidates-hub trailing icons. Direct links when the value is on file;
+  // otherwise the icon opens the detail modal so the recruiter can add it.
+  const hubMode = !!onToggleChat;
+  const linkedinHref = httpUrl(candidate.linkedin_url);
+  const resumeHref = httpUrl(candidate.resume);
+  const hasNotes = !!candidate.notes && candidate.notes.trim().length > 0;
 
   // `value` is the live display value: continuous while dragging, snapped on
   // release. Re-syncs from the row whenever the persisted stage changes (and we
@@ -103,12 +124,13 @@ export default function CandidateRow({
 
   return (
     <article style={{ ...styles.row, ...(archived ? styles.rowArchived : null) }}>
-      {/* Identity */}
+      {/* Identity — in the hub, clicking it toggles the notes/chat dropdown (§4) */}
       <button
         type="button"
         style={styles.identity}
-        onClick={() => onOpenDetail(candidate)}
-        title="Open candidate"
+        onClick={() => (hubMode ? onToggleChat!(candidate) : onOpenDetail(candidate))}
+        title={hubMode ? 'Open notes' : 'Open candidate'}
+        aria-expanded={hubMode ? chatOpen : undefined}
       >
         <span style={styles.avatar} aria-hidden>
           <i className="ti ti-user" />
@@ -179,6 +201,72 @@ export default function CandidateRow({
 
       {/* Actions */}
       <div style={styles.actions}>
+        {hubMode && (
+          <div style={styles.iconGroup}>
+            {/* LinkedIn → profile link (or modal to add one) */}
+            {linkedinHref ? (
+              <a
+                href={linkedinHref}
+                target="_blank"
+                rel="noreferrer"
+                style={{ ...styles.iconBtn, color: C.linkedin }}
+                title="Open LinkedIn profile"
+                aria-label="Open LinkedIn profile"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <i className="ti ti-brand-linkedin" aria-hidden />
+              </a>
+            ) : (
+              <button
+                style={styles.iconBtn}
+                onClick={() => onOpenDetail(candidate)}
+                title="Add LinkedIn profile"
+                aria-label="Add LinkedIn profile"
+              >
+                <i className="ti ti-brand-linkedin" aria-hidden />
+              </button>
+            )}
+
+            {/* Notes → toggle the chat/notes dropdown (lit green when on file) */}
+            <button
+              style={{
+                ...styles.iconBtn,
+                ...(chatOpen ? styles.iconBtnActive : null),
+                ...(hasNotes && !chatOpen ? styles.iconBtnSignal : null),
+              }}
+              onClick={() => onToggleChat!(candidate)}
+              title={hasNotes ? 'Notes on file — open' : 'Add notes'}
+              aria-label="Open notes"
+              aria-expanded={chatOpen}
+            >
+              <i className="ti ti-notes" aria-hidden />
+            </button>
+
+            {/* Résumé → open the file (or modal to upload one) */}
+            {resumeHref ? (
+              <a
+                href={resumeHref}
+                target="_blank"
+                rel="noreferrer"
+                style={{ ...styles.iconBtn, ...styles.iconBtnSignal }}
+                title="Open résumé"
+                aria-label="Open résumé"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <i className="ti ti-file-cv" aria-hidden />
+              </a>
+            ) : (
+              <button
+                style={styles.iconBtn}
+                onClick={() => onOpenDetail(candidate)}
+                title="Upload résumé"
+                aria-label="Upload résumé"
+              >
+                <i className="ti ti-file-cv" aria-hidden />
+              </button>
+            )}
+          </div>
+        )}
         {archived ? (
           <button style={styles.restoreBtn} onClick={() => onArchive(candidate, false)} title="Restore to cockpit">
             Restore
@@ -297,6 +385,33 @@ const styles: Record<string, React.CSSProperties> = {
   },
 
   actions: { display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 },
+  iconGroup: { display: 'flex', alignItems: 'center', gap: 4, marginRight: 2 },
+  iconBtn: {
+    width: 32,
+    height: 32,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    border: BORDER,
+    borderRadius: RADIUS.button,
+    background: 'transparent',
+    color: C.muted,
+    cursor: 'pointer',
+    fontSize: 16,
+    textDecoration: 'none',
+  },
+  // Lit green when the value (note/résumé) is on file — the §3 "signal".
+  iconBtnSignal: {
+    border: `1px solid ${C.green}55`,
+    background: `${C.green}14`,
+    color: C.green,
+  },
+  // Active = the notes dropdown for this bar is open.
+  iconBtnActive: {
+    border: `1px solid ${C.green}66`,
+    background: `${C.green}1f`,
+    color: C.green,
+  },
   archiveBtn: {
     padding: '6px 12px',
     border: BORDER,
