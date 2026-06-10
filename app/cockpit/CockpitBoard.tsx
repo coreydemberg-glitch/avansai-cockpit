@@ -23,11 +23,15 @@ import {
   getEmailTemplate,
   setCandidateArchived,
   setPrepSent,
+  setFunnelStage,
   closeActionItem,
   saveFeedback,
 } from './actions';
 import { C, STATUS, FONT, RADIUS, BORDER } from './funnel/tokens';
-import FunnelTimeline from './funnel/FunnelTimeline';
+import StageFunnel from './funnel/StageFunnel';
+import CandidateRow from './funnel/CandidateSlider';
+import PrepModal from './funnel/PrepModal';
+import { sliderValue, snapHalf, decompose, isHalfStep } from './funnel/stage';
 import Legend from './funnel/Legend';
 import ActionItemsPanel from './funnel/ActionItemsPanel';
 import DqColumn from './funnel/DqColumn';
@@ -35,6 +39,7 @@ import QuadrantTile from './outreach/QuadrantTile';
 import OutboundView from './outbound/OutboundView';
 import ReferralView from './referral/ReferralView';
 import JobLibrary from './jobs/JobLibrary';
+import PrepLibrary from './jobs/PrepLibrary';
 
 // Which top-level section the cockpit is showing. In-page view switching (no
 // routing) — matches the codebase's existing local-state model and keeps the
@@ -127,10 +132,70 @@ export default function CockpitBoard({
   // Shared job-description list (email picker + parking-lot upload).
   const [jobs, setJobs] = useState<JobDescription[]>(initialJobs);
   const [showAddJob, setShowAddJob] = useState(false);
+  const [showPrepLib, setShowPrepLib] = useState(false);
   const refreshJobs = useCallback(async () => {
     const res = await listJobDescriptions();
     if (res.ok) setJobs(res.jobs);
   }, []);
+
+  // ── Slider → stage writes (slider build §3/§4) ─────────────────────────────
+  // The prep modal auto-pops when a slider lands on a fresh half-step.
+  const [prepFor, setPrepFor] = useState<{
+    candidate: Candidate;
+    stage: number;
+    value: number;
+  } | null>(null);
+
+  // Patch a candidate in the local list (optimistic; keeps the funnel counts +
+  // segment lasers in sync the instant a slider moves).
+  const patchCandidate = useCallback((id: string, patch: Partial<Candidate>) => {
+    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+  }, []);
+
+  // Debounced persistence, keyed per candidate, so rapid nudges coalesce into one
+  // write (spec §3: "debounced to avoid write spam").
+  const writeTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const persistStage = useCallback(
+    (id: string, state: { funnel_stage: number; pending: boolean; prep_sent: boolean }) => {
+      clearTimeout(writeTimers.current[id]);
+      writeTimers.current[id] = setTimeout(() => {
+        setFunnelStage(id, state);
+      }, 400);
+    },
+    []
+  );
+
+  // Commit a slider release: decompose the snapped value, decide prep_sent + whether
+  // to pop the prep modal, update the row optimistically, and persist (debounced).
+  const commitStage = useCallback(
+    (candidate: Candidate, value: number) => {
+      const snapped = snapHalf(value);
+      const { funnel_stage, pending } = decompose(snapped);
+      const onHalf = isHalfStep(snapped);
+
+      // Re-releasing on the SAME already-prepped half-step keeps prep (no re-pop).
+      const prev = sliderValue(candidate);
+      const stayedPrepped =
+        onHalf && prev === snapped && !!candidate.prep_sent;
+
+      const prepSent = onHalf ? (stayedPrepped ? true : false) : false;
+      const patch: Partial<Candidate> = { funnel_stage, pending, prep_sent: prepSent };
+      patchCandidate(candidate.id, patch);
+      persistStage(candidate.id, { funnel_stage, pending, prep_sent: prepSent });
+
+      // Landing fresh on a half-step → auto-trigger the Prep modal for that round.
+      if (onHalf && !stayedPrepped) {
+        setPrepFor({ candidate: { ...candidate, ...patch }, stage: funnel_stage, value: snapped });
+      }
+    },
+    [patchCandidate, persistStage]
+  );
+
+  // Prep was sent → lock the half-step into a green laser and refresh server data.
+  const handlePrepSent = useCallback(() => {
+    if (prepFor) patchCandidate(prepFor.candidate.id, { prep_sent: true });
+    router.refresh();
+  }, [prepFor, patchCandidate, router]);
 
   // Sidebar: nav items (set the active view) + a utility action (opens a dialog).
   const parkingActions: ParkingAction[] = [
@@ -160,6 +225,12 @@ export default function CockpitBoard({
       icon: 'ti-file-plus',
       label: 'Add Job Description',
       onClick: () => setShowAddJob(true),
+    },
+    {
+      key: 'prep-docs',
+      icon: 'ti-files',
+      label: 'Prep Documents',
+      onClick: () => setShowPrepLib(true),
     },
   ];
 
@@ -232,10 +303,7 @@ export default function CockpitBoard({
               {inFunnel.length} active · {dqCandidates.length} DQ
             </span>
           </div>
-          <FunnelTimeline
-            candidates={active}
-            onSelect={(c) => openCandidate(c, null)}
-          />
+          <StageFunnel candidates={active} />
         </section>
 
         {/* 2 · Symmetric 2×2 quadrant grid — Outbound · Referral · DQ · (new) */}
@@ -295,60 +363,16 @@ export default function CockpitBoard({
           </p>
         ) : (
           <div style={styles.list}>
-            {shown.map((c) => {
-              const accent = c.dq
-                ? STATUS.dq
-                : c.prep_sent
-                  ? STATUS.prepped
-                  : STATUS.pending;
-              return (
-                <article
-                  key={c.id}
-                  style={{
-                    ...styles.card,
-                    borderLeft: `3px solid ${accent}`,
-                    ...(c.archived ? styles.cardArchived : null),
-                  }}
-                  onClick={() => openCandidate(c, null)}
-                  role="button"
-                  tabIndex={0}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') openCandidate(c, null);
-                  }}
-                >
-                  <div style={styles.cardMain}>
-                    <h2 style={styles.name}>{c.name || 'Untitled'}</h2>
-                    <p style={styles.role}>{c.role || 'Role not set'}</p>
-                  </div>
-                  <div style={styles.cardRight}>
-                    <FunnelPill candidate={c} />
-                    {view === 'active' ? (
-                      <button
-                        style={styles.archiveBtn}
-                        title="Remove from cockpit (does NOT touch Trello)"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          archiveCandidate(c, true);
-                        }}
-                      >
-                        Archive
-                      </button>
-                    ) : (
-                      <button
-                        style={styles.restoreBtn}
-                        title="Bring back into the cockpit"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          archiveCandidate(c, false);
-                        }}
-                      >
-                        Restore
-                      </button>
-                    )}
-                  </div>
-                </article>
-              );
-            })}
+            {shown.map((c) => (
+              <CandidateRow
+                key={c.id}
+                candidate={c}
+                archived={view === 'archived'}
+                onCommit={commitStage}
+                onOpenDetail={(cand) => openCandidate(cand, null)}
+                onArchive={archiveCandidate}
+              />
+            ))}
           </div>
         )}
         </>
@@ -391,6 +415,21 @@ export default function CockpitBoard({
         <JobLibrary
           onClose={() => setShowAddJob(false)}
           onChanged={refreshJobs}
+        />
+      )}
+
+      {showPrepLib && <PrepLibrary onClose={() => setShowPrepLib(false)} />}
+
+      {prepFor && (
+        <PrepModal
+          key={`${prepFor.candidate.id}-${prepFor.value}`}
+          candidate={prepFor.candidate}
+          stage={prepFor.stage}
+          value={prepFor.value}
+          jobs={jobs}
+          onSent={handlePrepSent}
+          onClose={() => setPrepFor(null)}
+          onOpenLibrary={() => setShowPrepLib(true)}
         />
       )}
     </div>
@@ -1311,7 +1350,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 800,
   },
   funnelCount: { fontSize: 12, color: C.muted2, whiteSpace: 'nowrap' },
-  panelsRow: { marginTop: 18, display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-start' },
 
   // Symmetric 2×2 quadrant grid below the funnel — all four cells equal size.
   quadGrid: {
@@ -1397,46 +1435,6 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: 'pointer',
   },
   list: { marginTop: 14, display: 'flex', flexDirection: 'column', gap: 10 },
-  card: {
-    background: C.panel,
-    border: BORDER,
-    borderRadius: RADIUS.card,
-    padding: '14px 18px',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 12,
-    cursor: 'pointer',
-  },
-  cardMain: { display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 },
-  cardRight: { display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 },
-  cardArchived: { opacity: 0.55 },
-  archiveBtn: {
-    padding: '5px 10px',
-    border: BORDER,
-    borderRadius: RADIUS.button,
-    background: 'transparent',
-    color: C.muted,
-    fontSize: 11,
-    fontWeight: 500,
-    fontFamily: FONT,
-    cursor: 'pointer',
-    whiteSpace: 'nowrap',
-  },
-  restoreBtn: {
-    padding: '5px 10px',
-    border: `1px solid ${C.green}66`,
-    borderRadius: RADIUS.button,
-    background: `${C.green}1f`,
-    color: C.green,
-    fontSize: 11,
-    fontWeight: 600,
-    fontFamily: FONT,
-    cursor: 'pointer',
-    whiteSpace: 'nowrap',
-  },
-  name: { margin: 0, fontSize: 14, fontWeight: 600, color: C.white, letterSpacing: '-0.01em' },
-  role: { margin: 0, color: C.muted, fontSize: 12, fontWeight: 400 },
   pill: {
     fontSize: 10,
     fontWeight: 700,

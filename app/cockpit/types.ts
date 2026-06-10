@@ -14,12 +14,15 @@ export type Candidate = {
   // Recoverable: the row stays; re-adding him on Trello sets this back to false.
   archived?: boolean | null;
 
-  // Funnel-timeline state (build spec §4). Synced from the candidate's Trello
-  // column by the webhook. All optional so rows from before the 0002 migration
-  // (and the cockpit) keep working if the columns aren't present yet.
-  funnel_stage?: number | null; // 1..5; null = not placed in the funnel yet
-  pending?: boolean | null; // sitting in a dotted "pending zone" after a stage
-  prep_sent?: boolean | null; // prep emailed → segment flips amber → green
+  // Funnel state (build spec §4 + the 8-stage slider build §1). The per-candidate
+  // slider runs 1.0 → 8.0 in half-steps, stored across these existing columns:
+  //   funnel_stage = floor(slider)   → 1..8, the whole milestone reached
+  //   pending      = slider is .5     → sitting in the gap after that stage
+  //   prep_sent    = prep email sent  → that half-step's line flips to a green laser
+  // All optional so rows from before the 0002/0006 migrations keep working.
+  funnel_stage?: number | null; // 1..8; null = not placed in the funnel yet
+  pending?: boolean | null; // true on a half-step (1.5, 2.5, …) — prep zone
+  prep_sent?: boolean | null; // prep emailed → segment flips red → green laser
   dq?: boolean | null; // exited the funnel to the DQ column
 };
 
@@ -51,6 +54,18 @@ export type ActionContext = 'prep' | 'feedback' | 'thankyou';
 export type JobDescription = {
   id: string;
   title: string;
+  file_path: string;
+  created_at?: string | null;
+};
+
+// A row in `prep_materials` (0006 migration). Interview-round prep docs the
+// candidate may need, browsable in the Prep Documents library and attachable
+// from the Prep modal. `stage` optionally tags a doc to a funnel stage (1..8);
+// `file_path` is the object path within the `prep-materials` storage bucket.
+export type PrepMaterial = {
+  id: string;
+  title: string;
+  stage: number | null;
   file_path: string;
   created_at?: string | null;
 };

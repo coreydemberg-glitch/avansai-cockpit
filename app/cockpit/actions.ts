@@ -7,6 +7,7 @@ import type {
   ActionItemWithCandidate,
   EmailTemplate,
   JobDescription,
+  PrepMaterial,
 } from './types';
 
 export type ActionResult = { ok: boolean; error?: string };
@@ -22,7 +23,7 @@ function isMissingFunnelSchema(error: {
     error?.code === '42P01' ||
     error?.code === 'PGRST204' ||
     error?.code === 'PGRST205' ||
-    /funnel_stage|prep_sent|action_items|relationship/i.test(error?.message ?? '')
+    /funnel_stage|prep_sent|action_items|prep_materials|relationship/i.test(error?.message ?? '')
   );
 }
 
@@ -162,7 +163,7 @@ export async function closeActionItem(
   return { ok: true };
 }
 
-// Flip prep_sent (amber → green on the timeline) once interview prep is emailed.
+// Flip prep_sent (red → green laser on the timeline) once interview prep is emailed.
 export async function setPrepSent(
   candidateId: string,
   prepSent: boolean
@@ -178,6 +179,59 @@ export async function setPrepSent(
   }
   revalidatePath('/cockpit');
   return { ok: true };
+}
+
+// Persist a slider move (8-stage build §3/§4). The slider value decomposes into
+// funnel_stage (1..8), pending (on a half-step), and prep_sent (prep emailed at
+// that half-step). Debounced on the client; this just writes last-write-wins.
+//
+// `degraded` is returned (with ok:true) when the write hits the pre-migration
+// 1..5 CHECK constraint (code 23514) for a stage 6–8, or the funnel columns are
+// absent — so the UI keeps its optimistic state and stays smooth. Run the 0006
+// migration to make stages 6–8 persist. (See the placeholder report.)
+export async function setFunnelStage(
+  candidateId: string,
+  state: { funnel_stage: number; pending: boolean; prep_sent: boolean }
+): Promise<ActionResult & { degraded?: boolean }> {
+  const supabase = getSupabaseAdmin();
+  const funnel_stage = Math.min(8, Math.max(1, Math.round(state.funnel_stage)));
+  const { error } = await supabase
+    .from('candidates')
+    .update({ funnel_stage, pending: state.pending, prep_sent: state.prep_sent })
+    .eq('id', candidateId);
+
+  if (error) {
+    // 23514 = check_violation (the 1..5 constraint hasn't been widened to 1..8).
+    if (error.code === '23514' || isMissingFunnelSchema(error)) {
+      console.warn(
+        `setFunnelStage degraded for ${candidateId} (stage ${funnel_stage}): ${error.message}. Run 0006_funnel_8stage.sql.`
+      );
+      return { ok: true, degraded: true };
+    }
+    return { ok: false, error: error.message };
+  }
+  revalidatePath('/cockpit');
+  return { ok: true };
+}
+
+// Prep materials for the Prep modal's doc picker (0006 migration). No-ops to []
+// when the table isn't present yet, so the modal still renders (JD-only).
+export async function listPrepMaterials(): Promise<{
+  ok: boolean;
+  materials: PrepMaterial[];
+  error?: string;
+}> {
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase
+    .from('prep_materials')
+    .select('id, title, stage, file_path, created_at')
+    .order('title', { ascending: true });
+
+  if (error) {
+    if (isMissingFunnelSchema(error)) return { ok: true, materials: [] };
+    return { ok: false, materials: [], error: error.message };
+  }
+  return { ok: true, materials: (data ?? []) as PrepMaterial[] };
 }
 
 // Accrue structured interview feedback into the candidate's file (spec §6). No
