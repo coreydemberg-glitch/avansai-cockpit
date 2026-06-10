@@ -25,10 +25,13 @@ export type Candidate = {
 
 // A row in `action_items`. Auto-populated by the webhook when a candidate enters
 // a state that needs action; the funnel's action panel reads open rows directly.
+// `manual` items are recruiter-created to-dos (no candidate; free-text `title`),
+// added/removed from the right-hand To-Do sidebar (0005 migration).
 export type ActionItem = {
   id: string;
-  candidate_id: string;
-  type: 'prep' | 'feedback' | 'thankyou';
+  candidate_id: string | null;
+  type: 'prep' | 'feedback' | 'thankyou' | 'manual';
+  title?: string | null;
   status: 'open' | 'done';
   created_at?: string | null;
 };

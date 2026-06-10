@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/app/lib/supabaseAdmin';
+import { extractPdfText, parseJobTitle } from '@/app/lib/pdf';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -18,7 +19,7 @@ export async function POST(req: NextRequest) {
   }
 
   const file = form.get('file');
-  const title = form.get('title');
+  const titleField = form.get('title');
 
   if (!(file instanceof File) || file.size === 0) {
     return NextResponse.json({ error: 'No file provided.' }, { status: 400 });
@@ -29,9 +30,9 @@ export async function POST(req: NextRequest) {
       { status: 400 }
     );
   }
-  if (typeof title !== 'string' || !title.trim()) {
-    return NextResponse.json({ error: 'A title is required.' }, { status: 400 });
-  }
+  // Title is optional — if the recruiter doesn't type one we parse it out of the
+  // PDF below (falling back to the file name).
+  const providedTitle = typeof titleField === 'string' ? titleField : '';
 
   const supabase = getSupabaseAdmin();
   const safeName = file.name.replace(/[^\w.\-]+/g, '_');
@@ -47,6 +48,12 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // Auto-title from the PDF contents when the recruiter didn't supply one. The
+  // file name (sans extension) is the last-resort fallback.
+  const fileNameWithoutExt = file.name.replace(/\.[^.]+$/, '');
+  const text = await extractPdfText(bytes);
+  const title = providedTitle.trim() || parseJobTitle(text, fileNameWithoutExt);
+
   const { error: upErr } = await supabase.storage
     .from(BUCKET)
     .upload(path, bytes, { contentType: 'application/pdf', upsert: false });
@@ -59,7 +66,7 @@ export async function POST(req: NextRequest) {
 
   const { data: row, error: dbErr } = await supabase
     .from('job_descriptions')
-    .insert({ title: title.trim(), file_path: path })
+    .insert({ title, file_path: path })
     .select('id, title, file_path, created_at')
     .single();
   if (dbErr) {

@@ -34,6 +34,7 @@ import DqColumn from './funnel/DqColumn';
 import QuadrantTile from './outreach/QuadrantTile';
 import OutboundView from './outbound/OutboundView';
 import ReferralView from './referral/ReferralView';
+import JobLibrary from './jobs/JobLibrary';
 
 // Which top-level section the cockpit is showing. In-page view switching (no
 // routing) — matches the codebase's existing local-state model and keeps the
@@ -226,6 +227,7 @@ export default function CockpitBoard({
         <section style={styles.funnelCard}>
           <div style={styles.funnelHead}>
             <span style={styles.funnelEyebrow}>Candidate funnel</span>
+            <Legend />
             <span style={styles.funnelCount}>
               {inFunnel.length} active · {dqCandidates.length} DQ
             </span>
@@ -236,36 +238,35 @@ export default function CockpitBoard({
           />
         </section>
 
-        {/* 1b · New quadrants — Outbound + Referral preview tiles (drill in) */}
-        <section style={styles.panelsRow}>
-          <QuadrantTile
-            eyebrow="Outbound"
-            icon="ti-send"
-            headline="Cold outreach"
-            stats={outboundStats}
-            onOpen={() => setSection('outbound')}
-          />
-          <QuadrantTile
-            eyebrow="Referrals"
-            icon="ti-affiliate"
-            headline="Warm network"
-            stats={referralStats}
-            onOpen={() => setSection('referrals')}
-          />
-        </section>
-
-        {/* 2 · Legend */}
-        <div style={{ marginTop: 14 }}>
-          <Legend />
-        </div>
-
-        {/* 3 · Action items + DQ column side by side */}
-        <section style={styles.panelsRow}>
-          <ActionItemsPanel items={actionItems} onOpen={openById} />
-          <DqColumn
-            candidates={dqCandidates}
-            onThankYou={(id) => openById(id, 'thankyou')}
-          />
+        {/* 2 · Symmetric 2×2 quadrant grid — Outbound · Referral · DQ · (new) */}
+        <section style={styles.quadGrid}>
+          <div style={styles.quadCell}>
+            <QuadrantTile
+              eyebrow="Outbound"
+              icon="ti-send"
+              headline="Cold outreach"
+              stats={outboundStats}
+              onOpen={() => setSection('outbound')}
+            />
+          </div>
+          <div style={styles.quadCell}>
+            <QuadrantTile
+              eyebrow="Referrals"
+              icon="ti-affiliate"
+              headline="Warm network"
+              stats={referralStats}
+              onOpen={() => setSection('referrals')}
+            />
+          </div>
+          <div style={styles.quadCell}>
+            <DqColumn
+              candidates={dqCandidates}
+              onThankYou={(id) => openById(id, 'thankyou')}
+            />
+          </div>
+          <div style={styles.quadCell}>
+            <PlaceholderQuadrant />
+          </div>
         </section>
 
         {/* Secondary: the full candidate list (archive / detail access) */}
@@ -380,13 +381,37 @@ export default function CockpitBoard({
         )}
       </main>
 
+      {/* Right rail: persistent To-Do panel (manual + auto-populated). Roughly
+          2× the left nav width so to-dos stay readable down the side. */}
+      <aside style={styles.todoSidebar} aria-label="To-do">
+        <ActionItemsPanel autoItems={actionItems} onOpen={openById} />
+      </aside>
+
       {showAddJob && (
-        <AddJobDescriptionDialog
+        <JobLibrary
           onClose={() => setShowAddJob(false)}
-          onUploaded={refreshJobs}
+          onChanged={refreshJobs}
         />
       )}
     </div>
+  );
+}
+
+// Bottom-right quadrant placeholder — a styled "next feature" slot that keeps the
+// 2×2 grid symmetric until the fourth surface ships.
+function PlaceholderQuadrant() {
+  return (
+    <section style={styles.placeholder}>
+      <div style={styles.placeholderHead}>
+        <span style={styles.placeholderEyebrow}>
+          <i className="ti ti-sparkles" aria-hidden /> Coming soon
+        </span>
+      </div>
+      <div style={styles.placeholderBody}>
+        <i className="ti ti-layout-grid-add" style={styles.placeholderIcon} aria-hidden />
+        <p style={styles.placeholderText}>Next workspace lands here.</p>
+      </div>
+    </section>
   );
 }
 
@@ -422,108 +447,6 @@ function ParkingLot({ actions }: { actions: ParkingAction[] }) {
         </button>
       ))}
     </aside>
-  );
-}
-
-function AddJobDescriptionDialog({
-  onClose,
-  onUploaded,
-}: {
-  onClose: () => void;
-  onUploaded: () => Promise<void> | void;
-}) {
-  const [title, setTitle] = useState('');
-  const [file, setFile] = useState<File | null>(null);
-  const [uploading, setUploading] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
-  const [done, setDone] = useState(false);
-
-  const handleUpload = async () => {
-    if (!file || !title.trim() || uploading) return;
-    setMsg(null);
-    setUploading(true);
-    try {
-      const fd = new FormData();
-      fd.append('title', title.trim());
-      fd.append('file', file);
-      const res = await fetch('/api/upload-job-description', {
-        method: 'POST',
-        body: fd,
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Upload failed');
-      await onUploaded();
-      setDone(true);
-      setMsg('Added ✓');
-    } catch (e) {
-      setMsg(e instanceof Error ? e.message : 'Upload failed');
-    } finally {
-      setUploading(false);
-    }
-  };
-
-  return (
-    <div style={styles.overlay} onClick={onClose}>
-      <div
-        style={styles.modal}
-        onClick={(e) => e.stopPropagation()}
-        role="dialog"
-        aria-modal="true"
-      >
-        <div style={styles.modalHeader}>
-          <div>
-            <h2 style={styles.modalTitle}>Add Job Description</h2>
-            <p style={styles.modalSub}>Upload a PDF to attach in candidate emails</p>
-          </div>
-          <button style={styles.closeBtn} onClick={onClose} aria-label="Close">
-            ✕
-          </button>
-        </div>
-
-        <div style={{ ...styles.sectionCol, marginTop: 18 }}>
-          <label style={styles.label}>Title</label>
-          <input
-            style={styles.input}
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="e.g. Full Stack Developer"
-          />
-          <label style={{ ...styles.label, marginTop: 12 }}>PDF file</label>
-          <input
-            type="file"
-            accept="application/pdf"
-            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-            disabled={uploading}
-            style={styles.input}
-          />
-          <div style={styles.saveRow}>
-            {done ? (
-              <button style={styles.primaryBtn} onClick={onClose}>
-                Done
-              </button>
-            ) : (
-              <button
-                style={styles.primaryBtn}
-                onClick={handleUpload}
-                disabled={uploading || !file || !title.trim()}
-              >
-                {uploading ? 'Uploading…' : 'Upload'}
-              </button>
-            )}
-            {msg && (
-              <span
-                style={{
-                  ...styles.saveMsg,
-                  color: msg.startsWith('Added') ? C.green : '#f87171',
-                }}
-              >
-                {msg}
-              </span>
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
   );
 }
 
@@ -564,13 +487,54 @@ function CandidateModal({
   const emailMode: EmailMode =
     context === 'prep' ? 'prep' : context === 'thankyou' ? 'thankyou' : 'follow_up';
 
-  // ── Notes (submittal cleanup, unchanged) ──
+  // ── Notes: debounced auto-save + a local draft that survives close/reopen ──
+  const draftKey = `cockpit:notes-draft:${candidate.id}`;
   const [notes, setNotes] = useState(candidate.notes ?? '');
-  const [saveMsg, setSaveMsg] = useState<string | null>(null);
+  type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
   const [isPending, startTransition] = useTransition();
   const [cleaned, setCleaned] = useState<string | null>(null);
   const [cleaning, setCleaning] = useState(false);
   const [cleanErr, setCleanErr] = useState<string | null>(null);
+  const lastSavedRef = useRef(candidate.notes ?? '');
+  const notesHydrated = useRef(false);
+
+  // Restore an unsaved local draft when the card opens, so edits the recruiter
+  // didn't explicitly save still reappear on reopen.
+  useEffect(() => {
+    try {
+      const draft = window.localStorage.getItem(draftKey);
+      if (draft != null && draft !== (candidate.notes ?? '')) setNotes(draft);
+    } catch {
+      /* localStorage unavailable — fall back to the server value */
+    }
+    notesHydrated.current = true;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Auto-save 2.5s after the last keystroke. The draft is mirrored to
+  // localStorage on every change first, so closing mid-edit never loses work.
+  useEffect(() => {
+    if (!notesHydrated.current) return; // skip the initial restore pass
+    try {
+      window.localStorage.setItem(draftKey, notes);
+    } catch {
+      /* ignore */
+    }
+    if (notes === lastSavedRef.current) return;
+    setSaveStatus('saving');
+    const t = setTimeout(async () => {
+      const res = await saveNotes(candidate.id, notes);
+      if (res.ok) {
+        lastSavedRef.current = notes;
+        setSaveStatus('saved');
+      } else {
+        setSaveStatus('error');
+      }
+    }, 2500);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [notes]);
 
   const handleClean = async () => {
     setCleanErr(null);
@@ -591,12 +555,26 @@ function CandidateModal({
     }
   };
 
-  const handleSave = () => {
-    setSaveMsg(null);
+  // Flush the current notes immediately (the debounce also saves on its own).
+  const handleSaveNow = () => {
+    setSaveStatus('saving');
     startTransition(async () => {
       const res = await saveNotes(candidate.id, notes);
-      setSaveMsg(res.ok ? 'Saved' : `Error: ${res.error ?? 'unknown'}`);
+      if (res.ok) {
+        lastSavedRef.current = notes;
+        setSaveStatus('saved');
+      } else {
+        setSaveStatus('error');
+      }
     });
+  };
+
+  // Promote the AI-cleaned version to BE the notes, so the raw text doesn't
+  // linger alongside it (no duplication). Auto-save then persists the result.
+  const applyCleaned = () => {
+    if (cleaned == null) return;
+    setNotes(cleaned);
+    setCleaned(null);
   };
 
   // ── Interview feedback (clean-notes mode:'feedback' → save to file) ──
@@ -650,16 +628,28 @@ function CandidateModal({
   const [prepSlug, setPrepSlug] = useState(PREP_OPTIONS[0].slug);
   const [sending, setSending] = useState(false);
   const [emailMsg, setEmailMsg] = useState<string | null>(null);
+  // Send-once guard: a given compose can fire at most one real email, so a
+  // double-click (or an impatient re-click) can never send a duplicate.
+  const [sentOnce, setSentOnce] = useState(false);
   const [templateLoading, setTemplateLoading] = useState(false);
   const prefillStarted = useRef(false);
+  // Set once the résumé parser fills the greeting, so template prefill defers to it.
+  const emailFromResume = useRef(false);
 
   // Prefill the email panel once, based on the mode. follow-up/thankyou pull a DB
   // template (editable without code); prep falls back to a per-stage default if no
   // prep_<slug> template exists. Greeting/body [name] tokens are dropped (MVP).
+  // Run once on mount (not when the email tab is first shown) so the template is
+  // already in place before a résumé upload can fill the greeting — otherwise a
+  // late-resolving template fetch could clobber the parsed "Hi {name},".
   useEffect(() => {
-    if (activeTab !== 'email' || prefillStarted.current) return;
+    if (prefillStarted.current) return;
     prefillStarted.current = true;
     const fill = (s: string) => s.split('[name]').join('');
+    // Don't overwrite a greeting the résumé parser already populated.
+    const setGreeting = (g: string) => {
+      if (!emailFromResume.current) setEmailGreeting(g);
+    };
 
     let cancelled = false;
     setTemplateLoading(true);
@@ -676,19 +666,19 @@ function CandidateModal({
         if (res.ok && res.template) {
           const t: EmailTemplate = res.template;
           setEmailSubject(t.subject);
-          setEmailGreeting(fill(t.greeting));
+          setGreeting(fill(t.greeting));
           setEmailBody(fill(t.body));
         } else {
           const d = defaultEmail(emailMode, candidate, prepSlug);
           setEmailSubject(d.subject);
-          setEmailGreeting(d.greeting);
+          setGreeting(d.greeting);
           setEmailBody(d.body);
         }
       })
       .catch(() => {
         const d = defaultEmail(emailMode, candidate, prepSlug);
         setEmailSubject(d.subject);
-        setEmailGreeting(d.greeting);
+        setGreeting(d.greeting);
         setEmailBody(d.body);
       })
       .finally(() => {
@@ -699,7 +689,7 @@ function CandidateModal({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab]);
+  }, []);
 
   // Re-apply the prep default when the recruiter switches prep doc (prep mode).
   const handlePrepChange = (slug: string) => {
@@ -720,6 +710,7 @@ function CandidateModal({
   };
 
   const handleSend = async () => {
+    if (sending || sentOnce) return; // never fire a duplicate email
     setEmailMsg(null);
     setSending(true);
     try {
@@ -750,6 +741,7 @@ function CandidateModal({
         await closeActionItem(candidate.id, 'thankyou');
         onChanged();
       }
+      setSentOnce(true);
       setEmailMsg('Sent ✓');
     } catch (e) {
       setEmailMsg(e instanceof Error ? e.message : 'Failed to send');
@@ -758,7 +750,7 @@ function CandidateModal({
     }
   };
 
-  // ── Resume upload (unchanged) ──
+  // ── Resume upload → auto-parse email + first name into the email panel ──
   const [resumeUrl, setResumeUrl] = useState<string | null>(candidate.resume ?? null);
   const [uploading, setUploading] = useState(false);
   const [resumeMsg, setResumeMsg] = useState<string | null>(null);
@@ -775,7 +767,23 @@ function CandidateModal({
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Upload failed');
       setResumeUrl(data.url);
-      setResumeMsg('Uploaded ✓');
+
+      // Parsed contact (PDF résumés only) pre-fills the email panel so the
+      // recruiter doesn't retype it: email → To, first name → "Hi {name},".
+      const parsed = data.parsed as
+        | { email: string | null; firstName: string | null }
+        | undefined;
+      const hits: string[] = [];
+      if (parsed?.email && !emailTo.trim()) {
+        setEmailTo(parsed.email);
+        hits.push('email');
+      }
+      if (parsed?.firstName) {
+        setEmailGreeting(`Hi ${parsed.firstName},`);
+        emailFromResume.current = true;
+        hits.push('name');
+      }
+      setResumeMsg(hits.length ? `Uploaded ✓ · parsed ${hits.join(' + ')}` : 'Uploaded ✓');
     } catch (err) {
       setResumeMsg(err instanceof Error ? err.message : 'Upload failed');
     } finally {
@@ -843,9 +851,9 @@ function CandidateModal({
             [
               { key: 'email', icon: 'ti-mail', label: 'Email' },
               { key: 'notes', icon: 'ti-notes', label: 'Notes' },
-              { key: 'feedback', icon: 'ti-message-2', label: 'Feedback' },
               { key: 'resume', icon: 'ti-file-cv', label: 'Resume' },
               { key: 'linkedin', icon: 'ti-brand-linkedin', label: 'LinkedIn' },
+              { key: 'feedback', icon: 'ti-message-2', label: 'Feedback' },
             ] as const
           ).map((t) => (
             <button
@@ -861,13 +869,16 @@ function CandidateModal({
         <div style={styles.tabContent}>
           {activeTab === 'notes' && (
             <>
-              <label style={styles.label}>Notes</label>
+              <div style={styles.notesLabelRow}>
+                <label style={styles.label}>Notes</label>
+                <SaveIndicator status={saveStatus} />
+              </div>
               <textarea
                 style={styles.textarea}
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
-                placeholder="Add notes about this candidate…"
-                rows={5}
+                placeholder="Add notes about this candidate… (auto-saves as you type)"
+                rows={6}
               />
               <div style={styles.saveRow}>
                 <button
@@ -878,27 +889,22 @@ function CandidateModal({
                   {cleaning ? 'Cleaning…' : cleaned ? 'Re-clean notes' : 'Clean notes'}
                 </button>
                 <button
-                  style={styles.primaryBtn}
-                  onClick={handleSave}
-                  disabled={isPending}
+                  style={styles.secondaryBtn}
+                  onClick={handleSaveNow}
+                  disabled={isPending || saveStatus === 'saving'}
                 >
-                  {isPending ? 'Saving…' : 'Save notes'}
+                  Save now
                 </button>
-                {saveMsg && (
-                  <span
-                    style={{
-                      ...styles.saveMsg,
-                      color: saveMsg.startsWith('Error') ? '#f87171' : C.green,
-                    }}
-                  >
-                    {saveMsg}
-                  </span>
-                )}
               </div>
               {cleanErr && <p style={styles.errMsg}>{cleanErr}</p>}
               {cleaned !== null && (
                 <div style={styles.cleanedBox}>
-                  <div style={styles.cleanedLabel}>Structured (AI cleanup)</div>
+                  <div style={styles.cleanedHead}>
+                    <span style={styles.cleanedLabel}>Structured (AI cleanup)</span>
+                    <button style={styles.primaryBtnSm} onClick={applyCleaned}>
+                      Use cleaned — replace notes
+                    </button>
+                  </div>
                   <div style={styles.cleanedText}>{cleaned}</div>
                 </div>
               )}
@@ -1028,11 +1034,11 @@ function CandidateModal({
               </select>
               <div style={styles.saveRow}>
                 <button
-                  style={styles.primaryBtn}
+                  style={sentOnce ? styles.sentBtn : styles.primaryBtn}
                   onClick={handleSend}
-                  disabled={sending || !emailTo}
+                  disabled={sending || sentOnce || !emailTo}
                 >
-                  {sending ? 'Sending…' : 'Send'}
+                  {sentOnce ? 'Sent ✓' : sending ? 'Sending…' : 'Send'}
                 </button>
                 {emailMsg && (
                   <span
@@ -1089,11 +1095,12 @@ function CandidateModal({
                     href={/^https?:\/\//i.test(savedLinkedin) ? savedLinkedin : '#'}
                     target="_blank"
                     rel="noreferrer"
-                    style={styles.openProfileBtn}
+                    style={styles.linkedinBtn}
                   >
-                    Open LinkedIn profile ↗
+                    <i className="ti ti-brand-linkedin" aria-hidden /> Open LinkedIn profile
+                    <span aria-hidden> ↗</span>
                   </a>
-                  <button style={styles.secondaryBtn} onClick={() => setSavedLinkedin('')}>
+                  <button style={styles.linkText} onClick={() => setSavedLinkedin('')}>
                     Edit URL
                   </button>
                 </>
@@ -1172,6 +1179,27 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
       <dt style={styles.fieldLabel}>{label}</dt>
       <dd style={styles.fieldValue}>{value}</dd>
     </div>
+  );
+}
+
+// Inline auto-save status for the notes panel (no buttons-as-text).
+function SaveIndicator({
+  status,
+}: {
+  status: 'idle' | 'saving' | 'saved' | 'error';
+}) {
+  if (status === 'idle') return null;
+  const map = {
+    saving: { dot: C.amber, text: 'Saving…' },
+    saved: { dot: C.green, text: 'All changes saved' },
+    error: { dot: '#f87171', text: 'Save failed — retrying on next edit' },
+  } as const;
+  const s = map[status];
+  return (
+    <span style={styles.saveIndicator}>
+      <span style={{ ...styles.saveDot, background: s.dot }} aria-hidden />
+      {s.text}
+    </span>
   );
 }
 
@@ -1259,14 +1287,18 @@ const styles: Record<string, React.CSSProperties> = {
   funnelCard: {
     marginTop: 28,
     background: C.panel,
-    border: BORDER,
+    // Higher-contrast border + soft shadow so the funnel "pops" like a card.
+    border: `1px solid ${C.line2}`,
     borderRadius: RADIUS.card,
-    padding: '18px 24px 12px',
+    padding: '18px 24px 16px',
+    boxShadow: '0 1px 0 rgba(255,255,255,0.03), 0 12px 30px -18px rgba(0,0,0,0.6)',
   },
   funnelHead: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
+    gap: 16,
+    flexWrap: 'wrap',
     paddingBottom: 14,
     borderBottom: BORDER,
     marginBottom: 8,
@@ -1278,8 +1310,66 @@ const styles: Record<string, React.CSSProperties> = {
     color: C.green,
     fontWeight: 800,
   },
-  funnelCount: { fontSize: 12, color: C.muted2 },
+  funnelCount: { fontSize: 12, color: C.muted2, whiteSpace: 'nowrap' },
   panelsRow: { marginTop: 18, display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-start' },
+
+  // Symmetric 2×2 quadrant grid below the funnel — all four cells equal size.
+  quadGrid: {
+    marginTop: 18,
+    display: 'grid',
+    gridTemplateColumns: '1fr 1fr',
+    gap: 16,
+  },
+  quadCell: { display: 'flex', minHeight: 196 },
+
+  // Persistent right rail (To-Do). ~2× the 92px left nav for readability.
+  todoSidebar: {
+    position: 'sticky',
+    top: 0,
+    alignSelf: 'flex-start',
+    height: '100vh',
+    width: 230,
+    flexShrink: 0,
+    background: C.panel2,
+    borderLeft: BORDER,
+    padding: '16px 14px',
+    boxSizing: 'border-box',
+    overflow: 'hidden',
+  },
+
+  // Bottom-right placeholder quadrant.
+  placeholder: {
+    flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+    background: `repeating-linear-gradient(135deg, ${C.panel2}, ${C.panel2} 10px, #20202900 10px, #20202900 20px)`,
+    border: `1px dashed ${C.line2}`,
+    borderRadius: 12,
+    padding: '14px 16px',
+    fontFamily: FONT,
+  },
+  placeholderHead: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' },
+  placeholderEyebrow: {
+    fontSize: 11,
+    letterSpacing: '0.15em',
+    textTransform: 'uppercase',
+    color: C.muted2,
+    fontWeight: 800,
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+  },
+  placeholderBody: {
+    flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    color: C.muted2,
+  },
+  placeholderIcon: { fontSize: 28, color: C.line2 },
+  placeholderText: { margin: 0, fontSize: 12, color: C.muted2 },
 
   empty: { marginTop: 20, color: C.muted, fontSize: 14 },
   listHeader: { marginTop: 34, display: 'flex', alignItems: 'center', justifyContent: 'flex-start' },
@@ -1410,10 +1500,14 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: 'inherit',
     fontSize: 14,
     color: C.white,
-    resize: 'vertical',
+    // Locked size — no drag-resize handle, so the card never jumps around.
+    resize: 'none',
     boxSizing: 'border-box',
   },
   saveRow: { display: 'flex', alignItems: 'center', gap: 12, marginTop: 12, flexWrap: 'wrap' },
+  notesLabelRow: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  saveIndicator: { display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: C.muted },
+  saveDot: { width: 7, height: 7, borderRadius: 999, flexShrink: 0 },
   primaryBtn: {
     padding: '9px 18px',
     border: 'none',
@@ -1421,6 +1515,29 @@ const styles: Record<string, React.CSSProperties> = {
     background: C.green,
     color: C.bg,
     cursor: 'pointer',
+    fontSize: 13,
+    fontWeight: 700,
+    fontFamily: 'inherit',
+  },
+  primaryBtnSm: {
+    padding: '6px 12px',
+    border: 'none',
+    borderRadius: RADIUS.button,
+    background: C.green,
+    color: C.bg,
+    cursor: 'pointer',
+    fontSize: 12,
+    fontWeight: 700,
+    fontFamily: 'inherit',
+    whiteSpace: 'nowrap',
+  },
+  sentBtn: {
+    padding: '9px 18px',
+    border: `1px solid ${C.green}66`,
+    borderRadius: RADIUS.button,
+    background: `${C.green}1f`,
+    color: C.green,
+    cursor: 'default',
     fontSize: 13,
     fontWeight: 700,
     fontFamily: 'inherit',
@@ -1439,7 +1556,8 @@ const styles: Record<string, React.CSSProperties> = {
   saveMsg: { fontSize: 13 },
   errMsg: { marginTop: 12, fontSize: 13, color: '#f87171' },
   cleanedBox: { marginTop: 16, border: BORDER, borderRadius: 10, background: C.panel2, padding: 14 },
-  cleanedLabel: { fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.08em', color: C.muted2, marginBottom: 8 },
+  cleanedHead: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 8 },
+  cleanedLabel: { fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.08em', color: C.muted2 },
   cleanedText: { fontSize: 14, lineHeight: 1.55, whiteSpace: 'pre-wrap', color: C.white },
   actionMsg: { marginTop: 4, fontSize: 13, color: C.muted },
   input: {
@@ -1478,17 +1596,33 @@ const styles: Record<string, React.CSSProperties> = {
     color: C.green,
     textAlign: 'center',
   },
-  tabContent: { minHeight: 140 },
+  // Fixed min-height so switching tabs doesn't make the card jump/shift.
+  tabContent: { minHeight: 340 },
   sectionCol: { display: 'flex', flexDirection: 'column', gap: 6 },
-  openProfileBtn: {
-    display: 'inline-block',
+  // Direct LinkedIn link, brand blue, opens the profile straight away (no menu).
+  linkedinBtn: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 8,
     alignSelf: 'flex-start',
-    padding: '9px 18px',
+    padding: '9px 16px',
     borderRadius: RADIUS.button,
-    background: C.green,
-    color: C.bg,
+    background: C.linkedin,
+    color: '#ffffff',
     textDecoration: 'none',
     fontSize: 13,
     fontWeight: 700,
+  },
+  linkText: {
+    alignSelf: 'flex-start',
+    marginTop: 10,
+    padding: 0,
+    border: 'none',
+    background: 'transparent',
+    color: C.muted,
+    cursor: 'pointer',
+    fontSize: 12,
+    fontFamily: 'inherit',
+    textDecoration: 'underline',
   },
 };

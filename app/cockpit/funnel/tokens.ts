@@ -5,21 +5,27 @@ export const C = {
   bg: '#1c1c23',
   panel: '#2a2a34',
   panel2: '#23232c',
+  panelHi: '#30303c', // slightly elevated surface for hover / nested cards
   line: '#383844',
+  line2: '#454553', // higher-contrast border so cards/funnel "pop"
   green: '#3fdf87',
   teal: '#2dd4bf',
   amber: '#fbbf24',
+  red: '#f0556d', // not prepped (funnel) — high-contrast against the dark bg
   blue: '#8aa0ff',
+  linkedin: '#0a66c2', // LinkedIn brand blue for the direct profile button
   white: '#f4f5f8',
   muted: '#9b9ba8',
   muted2: '#6b6b78',
 } as const;
 
-// Status colors (spec §7): amber = pending / action needed, green = prepped /
-// advancing, grey = DQ / exited.
+// Status colors. Funnel chips read as a binary the recruiter asked for:
+// red = not prepped, green = prepped/advancing; grey = DQ / exited. `pending`
+// keeps the amber alias used by non-funnel surfaces (pills, action rows).
 export const STATUS = {
-  pending: C.amber,
+  notPrepped: C.red,
   prepped: C.green,
+  pending: C.amber,
   dq: C.muted2,
 } as const;
 

@@ -5,7 +5,7 @@
 import type { Candidate } from '../types';
 import { STAGE_LABELS } from './tokens';
 
-export type ChipStatus = 'pending' | 'prepped';
+export type ChipStatus = 'prepped' | 'notPrepped';
 
 export type PlacedChip = {
   id: string;
@@ -20,8 +20,8 @@ export type StageCircle = { n: number; x: number; y: number; label: string };
 
 // A timeline segment (the dotted "pending zone" after a stage). Its state mirrors
 // the candidates standing in it: green+solid if anyone is prepped/advancing,
-// amber+dotted if anyone is pending-unprepped, else neutral dotted structure.
-export type SegmentState = 'prepped' | 'pending' | 'idle';
+// red+dashed if anyone is not-prepped (action owed), else neutral dotted structure.
+export type SegmentState = 'prepped' | 'notPrepped' | 'idle';
 export type Segment = { x1: number; x2: number; y: number; state: SegmentState };
 
 // The in-SVG DQ exit (approved mockup): a faint dotted peel dropping off the stage
@@ -44,19 +44,18 @@ export type FunnelLayout = {
   chipW: number;
   chipH: number;
   circleR: number;
-  xLabel: { x: number; y: number };
-  yLabel: { x: number; y: number };
   dq: DqExit | null; // the exit peel + DQ box, or null when nobody has exited
 };
 
-// Approved-mockup coordinate system: a 680-wide canvas with the five stage circles
-// at x = 110, 235, 360, 485, 610 (step 125) on a baseline at y ≈ 115. Keeping these
-// proportions makes the rendered timeline match the approved mockup 1:1.
+// Coordinate system: a 680-wide canvas with the five stage circles evenly spread
+// between symmetric horizontal margins (no more axis stubs), so the timeline fills
+// the width with clean padding on both sides. With W=680 and 64px margins the step
+// is 138, placing circles at x = 64, 202, 340, 478, 616.
 const W = 680;
-const MARGIN_L = 110; // x of the first circle
-const MARGIN_R = 70; // gap from the last circle to the right edge
+const MARGIN_L = 64; // x of the first circle (clean left padding)
+const MARGIN_R = 64; // gap from the last circle to the right edge (symmetric)
 const CIRCLE_R = 18;
-const CHIP_W = 98;
+const CHIP_W = 140; // wide enough to show full candidate names
 const CHIP_H = 34;
 const CHIP_GAP = 9;
 const GAP_ABOVE_LINE = 53; // chip-bottom → line, so chips float high like the mockup
@@ -102,7 +101,7 @@ export function layoutFunnel(candidates: Candidate[]): FunnelLayout {
     return {
       c,
       x: zoneX(stage, pending, circles),
-      status: c.prep_sent ? 'prepped' : 'pending',
+      status: c.prep_sent ? 'prepped' : 'notPrepped',
     };
   });
 
@@ -147,7 +146,7 @@ export function layoutFunnel(candidates: Candidate[]): FunnelLayout {
     const state: SegmentState = gapPre.some((p) => p.status === 'prepped')
       ? 'prepped'
       : gapPre.length
-        ? 'pending'
+        ? 'notPrepped'
         : 'idle';
     segments.push({
       x1: circles[i].x + CIRCLE_R,
@@ -182,8 +181,6 @@ export function layoutFunnel(candidates: Candidate[]): FunnelLayout {
     chipW: CHIP_W,
     chipH: CHIP_H,
     circleR: CIRCLE_R,
-    xLabel: { x: MARGIN_L - 80, y: baselineY },
-    yLabel: { x: W - 30, y: baselineY },
     dq,
   };
 }

@@ -41,6 +41,9 @@ export default function ComposeModal({
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const [isError, setIsError] = useState(false);
+  // Latch a real (live) send so it fires at most once per open compose — guards
+  // against double-clicks firing duplicate cold emails. Dry runs stay repeatable.
+  const [sentOnce, setSentOnce] = useState(false);
 
   // Load the outbound templates once; seed the compose fields from the first one.
   useEffect(() => {
@@ -82,7 +85,7 @@ export default function ComposeModal({
   }, [sendable, subject, body]);
 
   const handleSend = async () => {
-    if (sendable.length === 0 || sending) return;
+    if (sendable.length === 0 || sending || sentOnce) return;
     setSending(true);
     setResult(null);
     setIsError(false);
@@ -108,6 +111,8 @@ export default function ComposeModal({
         );
       } else {
         setResult(`Sent ${data.sent}, failed ${data.failed}${skipNote}. Marked contacted ✓`);
+        // Live send fired — latch it so this compose can't double-send.
+        setSentOnce(true);
         onSent();
       }
     } catch (e) {
@@ -186,11 +191,11 @@ export default function ComposeModal({
 
           <div style={styles.saveRow}>
             <button
-              style={styles.primaryBtn}
+              style={sentOnce ? styles.doneBtn : styles.primaryBtn}
               onClick={handleSend}
-              disabled={sending || sendable.length === 0}
+              disabled={sending || sentOnce || sendable.length === 0}
             >
-              {sending ? 'Sending…' : `Send to ${sendable.length}`}
+              {sentOnce ? 'Sent ✓' : sending ? 'Sending…' : `Send to ${sendable.length}`}
             </button>
             {result && (
               <span style={{ ...styles.saveMsg, color: isError ? '#f87171' : C.green }}>
@@ -270,6 +275,18 @@ const styles: Record<string, React.CSSProperties> = {
     background: C.green,
     color: C.bg,
     cursor: 'pointer',
+    fontSize: 13,
+    fontWeight: 700,
+    fontFamily: 'inherit',
+  },
+  // Latched state after a live send — muted green-done, non-interactive.
+  doneBtn: {
+    padding: '9px 18px',
+    border: `1px solid ${C.green}`,
+    borderRadius: RADIUS.button,
+    background: 'transparent',
+    color: C.green,
+    cursor: 'default',
     fontSize: 13,
     fontWeight: 700,
     fontFamily: 'inherit',

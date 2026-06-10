@@ -6,20 +6,53 @@ import { layoutFunnel, type ChipStatus, type SegmentState } from './geometry';
 
 const segStroke: Record<SegmentState, string> = {
   prepped: STATUS.prepped,
-  pending: STATUS.pending,
+  notPrepped: STATUS.notPrepped,
   idle: C.line,
 };
 
+// Chip color is the binary the recruiter asked for: prepped → green, not-prepped
+// → red. Borders/connectors follow suit (green solid, red dashed).
 const chipColor: Record<ChipStatus, string> = {
-  pending: STATUS.pending,
   prepped: STATUS.prepped,
+  notPrepped: STATUS.notPrepped,
 };
 
-const truncate = (s: string, n = 18) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
+// Show the full candidate name; only ellipsize past ~22 chars so the wider chip
+// rarely truncates at all.
+const truncate = (s: string, n = 22) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
+
+// Reusable status badge (replaces the old filled status dot). Drawn purely as SVG
+// vectors — no icon font, which doesn't render reliably inside <text>. Prepped is
+// a green ring with a crisp white check; not-prepped is a hollow red ring with a
+// small red center dot. `cx`/`cy` is the badge center.
+function StatusBadge({ status, cx, cy }: { status: ChipStatus; cx: number; cy: number }) {
+  const color = chipColor[status];
+  if (status === 'prepped') {
+    return (
+      <g>
+        <circle cx={cx} cy={cy} r={7} fill="none" stroke={color} strokeWidth={1.6} />
+        <path
+          d={`M ${cx - 3} ${cy + 0.3} L ${cx - 0.8} ${cy + 2.6} L ${cx + 3.4} ${cy - 2.4}`}
+          fill="none"
+          stroke={C.white}
+          strokeWidth={1.6}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </g>
+    );
+  }
+  return (
+    <g>
+      <circle cx={cx} cy={cy} r={7} fill="none" stroke={color} strokeWidth={1.6} />
+      <circle cx={cx} cy={cy} r={1.8} fill={color} />
+    </g>
+  );
+}
 
 // Reusable, data-driven funnel timeline (spec §7). Candidates float as chips
 // above the zone they occupy with a connector down to the line; the segment a
-// pending candidate stands in reflects their state (amber dotted = action owed,
+// pending candidate stands in reflects their state (red dashed = action owed,
 // green solid = prepped/advancing). DQ candidates leave via the faint peel-off.
 export default function FunnelTimeline({
   candidates,
@@ -39,49 +72,8 @@ export default function FunnelTimeline({
       role="img"
       aria-label="Candidate funnel timeline"
     >
-      {/* Axis end labels */}
-      <text
-        x={L.xLabel.x}
-        y={L.xLabel.y + 5}
-        fill={C.muted2}
-        fontSize={13}
-        fontWeight={800}
-        textAnchor="middle"
-      >
-        X
-      </text>
-      <text
-        x={L.yLabel.x}
-        y={L.yLabel.y + 5}
-        fill={C.muted2}
-        fontSize={13}
-        fontWeight={800}
-        textAnchor="middle"
-      >
-        Y
-      </text>
-
-      {/* Stub from X label into the first circle, and last circle out to Y */}
-      <line
-        x1={L.xLabel.x + 14}
-        y1={L.baselineY}
-        x2={L.circles[0].x - L.circleR}
-        y2={L.baselineY}
-        stroke={C.line}
-        strokeWidth={2}
-        strokeDasharray="2 5"
-      />
-      <line
-        x1={L.circles[4].x + L.circleR}
-        y1={L.baselineY}
-        x2={L.yLabel.x - 14}
-        y2={L.baselineY}
-        stroke={C.line}
-        strokeWidth={2}
-        strokeDasharray="2 5"
-      />
-
-      {/* Pending-zone segments between stages */}
+      {/* Pending-zone segments between stages (inset by CIRCLE_R in geometry so the
+          dashes never touch the colored stage circles) */}
       {L.segments.map((s, i) => (
         <line
           key={`seg-${i}`}
@@ -92,7 +84,7 @@ export default function FunnelTimeline({
           stroke={segStroke[s.state]}
           strokeWidth={s.state === 'idle' ? 2 : 2.5}
           strokeDasharray={
-            s.state === 'prepped' ? undefined : s.state === 'pending' ? '2 6' : '2 5'
+            s.state === 'prepped' ? undefined : s.state === 'notPrepped' ? '2 6' : '2 5'
           }
           strokeLinecap="round"
         />
@@ -141,7 +133,8 @@ export default function FunnelTimeline({
         </g>
       )}
 
-      {/* Stage circles (numbered milestones) + labels */}
+      {/* Stage circles (numbered milestones) + labels. The green ring is the
+          "achieved milestone" accent; the number inside stays legible in white. */}
       {L.circles.map((c) => (
         <g key={`circle-${c.n}`}>
           <circle
@@ -155,9 +148,9 @@ export default function FunnelTimeline({
           <text
             x={c.x}
             y={c.y + 5}
-            fill={STATUS.prepped}
+            fill={C.white}
             fontSize={14}
-            fontWeight={800}
+            fontWeight={700}
             textAnchor="middle"
           >
             {c.n}
@@ -175,7 +168,8 @@ export default function FunnelTimeline({
         </g>
       ))}
 
-      {/* Candidate chips + their connectors down to the line */}
+      {/* Candidate chips + their connectors down to the line. All chips share one
+          typography scale regardless of status (name 12.5/600, sub-line 9.5). */}
       {L.chips.map((chip) => {
         const color = chipColor[chip.status];
         const solid = chip.status === 'prepped';
@@ -188,7 +182,7 @@ export default function FunnelTimeline({
             style={{ cursor: 'pointer' }}
             onClick={() => cand && onSelect(cand)}
           >
-            {/* connector (the per-candidate "segment": amber dotted / green solid) */}
+            {/* connector (the per-candidate "segment": green solid / red dashed) */}
             <line
               x1={chip.x}
               y1={chip.connFromY}
@@ -208,17 +202,18 @@ export default function FunnelTimeline({
               stroke={color}
               strokeWidth={1}
             />
-            <circle cx={x + 14} cy={chip.cy} r={4} fill={color} />
+            {/* sleek vector status badge (replaces the old filled status dot) */}
+            <StatusBadge status={chip.status} cx={x + 16} cy={chip.cy} />
             <text
-              x={x + 26}
+              x={x + 30}
               y={chip.cy - 4}
               fill={C.white}
-              fontSize={12}
-              fontWeight={700}
+              fontSize={12.5}
+              fontWeight={600}
             >
-              {truncate(chip.name, 11)}
+              {truncate(chip.name)}
             </text>
-            <text x={x + 26} y={chip.cy + 9} fill={color} fontSize={9.5}>
+            <text x={x + 30} y={chip.cy + 9} fill={color} fontSize={9.5}>
               {chip.status === 'prepped' ? 'prep sent' : 'prep needed'}
             </text>
           </g>
