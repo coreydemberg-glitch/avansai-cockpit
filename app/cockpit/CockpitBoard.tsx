@@ -40,11 +40,12 @@ import OutboundView from './outbound/OutboundView';
 import ReferralView from './referral/ReferralView';
 import JobLibrary from './jobs/JobLibrary';
 import PrepLibrary from './jobs/PrepLibrary';
+import SourcingView from './sourcing/SourcingView';
 
 // Which top-level section the cockpit is showing. In-page view switching (no
 // routing) — matches the codebase's existing local-state model and keeps the
 // sidebar + center reactive to the current selection.
-type View = 'dashboard' | 'outbound' | 'referrals';
+type View = 'dashboard' | 'outbound' | 'referrals' | 'sourcing';
 
 const trelloUrl = (cardId: string | null) =>
   cardId ? `https://trello.com/c/${cardId}` : null;
@@ -221,6 +222,13 @@ export default function CockpitBoard({
       active: section === 'referrals',
     },
     {
+      key: 'sourcing',
+      icon: 'ti-user-search',
+      label: 'Sourcing',
+      onClick: () => setSection('sourcing'),
+      active: section === 'sourcing',
+    },
+    {
       key: 'add-job',
       icon: 'ti-file-plus',
       label: 'Add Job Description',
@@ -333,7 +341,13 @@ export default function CockpitBoard({
             />
           </div>
           <div style={styles.quadCell}>
-            <PlaceholderQuadrant />
+            <QuadrantTile
+              eyebrow="Sourcing"
+              icon="ti-user-search"
+              headline="Boolean building & market mapping"
+              stats={[]}
+              onOpen={() => setSection('sourcing')}
+            />
           </div>
         </section>
 
@@ -393,6 +407,8 @@ export default function CockpitBoard({
           />
         )}
 
+        {section === 'sourcing' && <SourcingView />}
+
         {selected && (
           <CandidateModal
             key={selected.id}
@@ -433,24 +449,6 @@ export default function CockpitBoard({
         />
       )}
     </div>
-  );
-}
-
-// Bottom-right quadrant placeholder — a styled "next feature" slot that keeps the
-// 2×2 grid symmetric until the fourth surface ships.
-function PlaceholderQuadrant() {
-  return (
-    <section style={styles.placeholder}>
-      <div style={styles.placeholderHead}>
-        <span style={styles.placeholderEyebrow}>
-          <i className="ti ti-sparkles" aria-hidden /> Coming soon
-        </span>
-      </div>
-      <div style={styles.placeholderBody}>
-        <i className="ti ti-layout-grid-add" style={styles.placeholderIcon} aria-hidden />
-        <p style={styles.placeholderText}>Next workspace lands here.</p>
-      </div>
-    </section>
   );
 }
 
@@ -1374,40 +1372,6 @@ const styles: Record<string, React.CSSProperties> = {
     boxSizing: 'border-box',
     overflow: 'hidden',
   },
-
-  // Bottom-right placeholder quadrant.
-  placeholder: {
-    flex: 1,
-    display: 'flex',
-    flexDirection: 'column',
-    background: `repeating-linear-gradient(135deg, ${C.panel2}, ${C.panel2} 10px, #20202900 10px, #20202900 20px)`,
-    border: `1px dashed ${C.line2}`,
-    borderRadius: 12,
-    padding: '14px 16px',
-    fontFamily: FONT,
-  },
-  placeholderHead: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' },
-  placeholderEyebrow: {
-    fontSize: 11,
-    letterSpacing: '0.15em',
-    textTransform: 'uppercase',
-    color: C.muted2,
-    fontWeight: 800,
-    display: 'flex',
-    alignItems: 'center',
-    gap: 6,
-  },
-  placeholderBody: {
-    flex: 1,
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    color: C.muted2,
-  },
-  placeholderIcon: { fontSize: 28, color: C.line2 },
-  placeholderText: { margin: 0, fontSize: 12, color: C.muted2 },
 
   empty: { marginTop: 20, color: C.muted, fontSize: 14 },
   listHeader: { marginTop: 34, display: 'flex', alignItems: 'center', justifyContent: 'flex-start' },
