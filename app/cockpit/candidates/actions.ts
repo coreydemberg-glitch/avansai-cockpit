@@ -10,7 +10,10 @@ import type { ActionItem } from '../types';
 // candidate_id: hub to-dos always carry the candidate they were raised for
 // (candidate_id NOT NULL), home's free-text to-dos never do (candidate_id NULL).
 // So the hub list is `type='manual' AND status='open' AND candidate_id NOT NULL`,
-// while the home master list keeps showing ALL manual to-dos (both).
+// and the cockpit-home list is the complement (candidate_id IS NULL) — see
+// listManualActionItems in app/cockpit/funnel/actionItemActions.ts. The two
+// lists partition the manual rows by candidate_id, so neither bleeds into the
+// other: hub note/résumé to-dos stay in the hub, home free-text to-dos stay home.
 //
 // The partial unique index action_items_one_open_per_type (candidate_id, type)
 // WHERE status='open' (0002) gives free per-candidate dedup: at most one open

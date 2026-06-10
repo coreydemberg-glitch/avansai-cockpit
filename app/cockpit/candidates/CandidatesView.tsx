@@ -7,7 +7,7 @@
 // the SAME `candidates` rows the home funnel reads (passed down from the server
 // page → CockpitBoard), and the Trello webhook still writes those rows. Nothing
 // about the Supabase/Trello plumbing changed; only where the bars are displayed.
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { Candidate } from '../types';
 import { C, FONT, RADIUS, BORDER } from '../funnel/tokens';
 import CandidateRow from '../funnel/CandidateSlider';
@@ -45,24 +45,29 @@ export default function CandidatesView({
   const archived = candidates.filter((c) => c.archived);
   const shown = view === 'active' ? active : archived;
 
-  // §3: on mount, ensure a BOLD to-do exists for every active candidate that has
-  // notes or a résumé on file. Idempotent server-side (one open per candidate).
-  const signalled = useRef(false);
+  // §3: ensure a BOLD to-do exists for every active candidate that has notes or a
+  // résumé on file. Idempotent server-side (one open per candidate). Keyed off a
+  // STABLE signature of the eligible set — so it re-runs when a candidate gains a
+  // note/résumé or a new Trello card lands, but NOT on every render (`active` is a
+  // fresh array each time) and NOT on unrelated slider/archive churn.
+  const eligible = active.filter(
+    (c) =>
+      (!!c.notes && c.notes.trim().length > 0) ||
+      (!!c.resume && /^https?:\/\//i.test(c.resume))
+  );
+  const signalKey = eligible
+    .map((c) => c.id)
+    .sort()
+    .join(',');
   useEffect(() => {
-    if (signalled.current) return;
-    signalled.current = true;
-    const items = active
-      .filter(
-        (c) =>
-          (!!c.notes && c.notes.trim().length > 0) ||
-          (!!c.resume && /^https?:\/\//i.test(c.resume))
-      )
-      .map((c) => ({ candidateId: c.id, title: signalTitle(c) }));
-    if (items.length) {
-      ensureCandidateSignalTodos(items).then(() => onTodoChanged());
-    }
+    if (!signalKey) return;
+    const items = eligible.map((c) => ({
+      candidateId: c.id,
+      title: signalTitle(c),
+    }));
+    ensureCandidateSignalTodos(items).then(() => onTodoChanged());
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [signalKey]);
 
   // §4 green-arrow capture → raise the BOLD to-do + collapse the bar.
   const handleCapture = async (c: Candidate) => {
