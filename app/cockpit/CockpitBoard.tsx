@@ -29,7 +29,6 @@ import {
 } from './actions';
 import { C, STATUS, FONT, RADIUS, BORDER } from './funnel/tokens';
 import StageFunnel from './funnel/StageFunnel';
-import CandidateRow from './funnel/CandidateSlider';
 import PrepModal from './funnel/PrepModal';
 import { sliderValue, snapHalf, decompose, isHalfStep } from './funnel/stage';
 import Legend from './funnel/Legend';
@@ -41,11 +40,13 @@ import ReferralView from './referral/ReferralView';
 import JobLibrary from './jobs/JobLibrary';
 import PrepLibrary from './jobs/PrepLibrary';
 import SourcingView from './sourcing/SourcingView';
+import CandidatesView from './candidates/CandidatesView';
+import CandidatesTodoPanel from './candidates/CandidatesTodoPanel';
 
 // Which top-level section the cockpit is showing. In-page view switching (no
 // routing) — matches the codebase's existing local-state model and keeps the
 // sidebar + center reactive to the current selection.
-type View = 'dashboard' | 'outbound' | 'referrals' | 'sourcing';
+type View = 'dashboard' | 'candidates' | 'outbound' | 'referrals' | 'sourcing';
 
 const trelloUrl = (cardId: string | null) =>
   cardId ? `https://trello.com/c/${cardId}` : null;
@@ -79,9 +80,14 @@ export default function CockpitBoard({
 }) {
   const router = useRouter();
 
-  // Top-level section (Dashboard / Outbound / Referrals). Named `section` to
-  // avoid colliding with the candidate-list `view` (active/archived) below.
+  // Top-level section (Dashboard / Candidates / Outbound / Referrals / Sourcing).
   const [section, setSection] = useState<View>('dashboard');
+
+  // Bumped whenever a candidate bar raises a to-do, so the hub's scoped to-do
+  // rail refetches. Kept here (not in the hub) because the rail lives in the
+  // shell alongside the home master To-Do.
+  const [todoRefresh, setTodoRefresh] = useState(0);
+  const bumpTodos = useCallback(() => setTodoRefresh((n) => n + 1), []);
 
   // The selected candidate + which funnel flow opened it (null = plain detail).
   const [selected, setSelected] = useState<Candidate | null>(null);
@@ -105,10 +111,11 @@ export default function CockpitBoard({
     [candidates, openCandidate]
   );
 
-  // Local copy of the rows so Archive/Restore updates the list instantly.
+  // Local copy of the rows so Archive/Restore updates the list instantly. The
+  // Candidates hub renders the bars from these same rows; the home funnel/DQ
+  // quadrant read them too, so a slider move stays in sync across both surfaces.
   const [rows, setRows] = useState<Candidate[]>(candidates);
   useEffect(() => setRows(candidates), [candidates]);
-  const [view, setView] = useState<'active' | 'archived'>('active');
   const [, startArchiveTransition] = useTransition();
 
   const archiveCandidate = (c: Candidate, archived: boolean) => {
@@ -229,6 +236,13 @@ export default function CockpitBoard({
       active: section === 'sourcing',
     },
     {
+      key: 'candidates',
+      icon: 'ti-users',
+      label: 'Candidates',
+      onClick: () => setSection('candidates'),
+      active: section === 'candidates',
+    },
+    {
       key: 'add-job',
       icon: 'ti-file-plus',
       label: 'Add Job Description',
@@ -255,8 +269,6 @@ export default function CockpitBoard({
   }, []);
 
   const active = rows.filter((c) => !c.archived);
-  const archived = rows.filter((c) => c.archived);
-  const shown = view === 'active' ? active : archived;
 
   const inFunnel = active.filter((c) => !c.dq);
   const dqCandidates = active.filter((c) => c.dq);
@@ -351,45 +363,19 @@ export default function CockpitBoard({
           </div>
         </section>
 
-        {/* Secondary: the full candidate list (archive / detail access) */}
-        <div style={styles.listHeader}>
-          <div style={styles.viewToggle}>
-            <button
-              style={view === 'active' ? styles.viewTabActive : styles.viewTab}
-              onClick={() => setView('active')}
-            >
-              Active ({active.length})
-            </button>
-            <button
-              style={view === 'archived' ? styles.viewTabActive : styles.viewTab}
-              onClick={() => setView('archived')}
-            >
-              Archived ({archived.length})
-            </button>
-          </div>
-        </div>
-
-        {shown.length === 0 ? (
-          <p style={styles.empty}>
-            {view === 'active'
-              ? 'No candidates here yet. Add yourself as a member on a Trello card and it will appear.'
-              : 'Nothing archived.'}
-          </p>
-        ) : (
-          <div style={styles.list}>
-            {shown.map((c) => (
-              <CandidateRow
-                key={c.id}
-                candidate={c}
-                archived={view === 'archived'}
-                onCommit={commitStage}
-                onOpenDetail={(cand) => openCandidate(cand, null)}
-                onArchive={archiveCandidate}
-              />
-            ))}
-          </div>
-        )}
+        {/* The full candidate list now lives in the Candidates hub (left nav).
+            Home keeps only the funnel timeline + the quadrant grid. */}
         </>
+        )}
+
+        {section === 'candidates' && (
+          <CandidatesView
+            candidates={rows}
+            onCommit={commitStage}
+            onOpenDetail={(cand) => openCandidate(cand, null)}
+            onArchive={archiveCandidate}
+            onTodoChanged={bumpTodos}
+          />
         )}
 
         {section === 'outbound' && (
@@ -421,11 +407,20 @@ export default function CockpitBoard({
         )}
       </main>
 
-      {/* Right rail: persistent To-Do panel (manual + auto-populated). Roughly
-          2× the left nav width so to-dos stay readable down the side. */}
-      <aside style={styles.todoSidebar} aria-label="To-do">
-        <ActionItemsPanel autoItems={actionItems} onOpen={openById} />
-      </aside>
+      {/* Right rail: To-Do panel. Scoped per section so the lists never bleed —
+          the cockpit-home master To-Do (manual + auto) shows ONLY on the
+          dashboard; the Candidates hub shows ONLY its own candidate to-dos;
+          Outbound/Referrals/Sourcing show no rail. Roughly 2× the left nav width
+          so to-dos stay readable down the side. */}
+      {(section === 'dashboard' || section === 'candidates') && (
+        <aside style={styles.todoSidebar} aria-label="To-do">
+          {section === 'dashboard' ? (
+            <ActionItemsPanel autoItems={actionItems} onOpen={openById} />
+          ) : (
+            <CandidatesTodoPanel refreshKey={todoRefresh} />
+          )}
+        </aside>
+      )}
 
       {showAddJob && (
         <JobLibrary
