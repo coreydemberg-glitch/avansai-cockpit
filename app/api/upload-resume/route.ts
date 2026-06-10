@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/app/lib/supabaseAdmin';
+import { extractPdfText, parseResumeContact } from '@/app/lib/pdf';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -62,5 +63,21 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  return NextResponse.json({ url: publicUrl, filename: file.name });
+  // Best-effort: pull the candidate's email + first name out of the resume so the
+  // client can pre-fill the form. PDFs only (images can't be text-extracted), and
+  // any failure leaves `parsed` empty rather than failing the upload.
+  let parsed: { email: string | null; firstName: string | null } = {
+    email: null,
+    firstName: null,
+  };
+  if (file.type === 'application/pdf') {
+    try {
+      const text = await extractPdfText(bytes);
+      parsed = parseResumeContact(text);
+    } catch {
+      // leave parsed as nulls
+    }
+  }
+
+  return NextResponse.json({ url: publicUrl, filename: file.name, parsed });
 }
