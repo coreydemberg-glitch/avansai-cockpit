@@ -22,8 +22,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.31.0/dist/tabler-icons.min.css"
         />
       </head>
-      {/* bg token #1c1c23 */}
-      <body style={{ margin: 0, background: '#1c1c23' }}>{children}</body>
+      {/* bg token C.bg (#070709) — matrix/cyberpunk near-black */}
+      <body style={{ margin: 0, background: '#070709' }}>{children}</body>
     </html>
   );
 }
