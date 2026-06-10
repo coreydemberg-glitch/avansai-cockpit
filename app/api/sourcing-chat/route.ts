@@ -227,7 +227,9 @@ async function searchPeople(input: AnyRec) {
     body.person_seniorities = input.seniorities;
   if (input.keywords) body.q_keywords = input.keywords;
 
-  const data = await apolloFetch('/mixed_people/search', {
+  // Apollo's people-search REST path is /mixed_people/api_search (verified live —
+  // /mixed_people/search returns 422; api_search returns 200 for this body).
+  const data = await apolloFetch('/mixed_people/api_search', {
     method: 'POST',
     body: JSON.stringify(body),
   });
