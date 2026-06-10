@@ -1,7 +1,8 @@
 'use client';
 
-import { useMemo, useState } from 'react';
-import type { Contact } from '../types';
+import { useEffect, useMemo, useState } from 'react';
+import type { Contact, OutboundTemplate } from '../types';
+import { listOutboundTemplates } from './actions';
 import { C, FONT, RADIUS, BORDER } from '../funnel/tokens';
 
 // Outbound compose: one template applied to all selected contacts, with
@@ -9,25 +10,18 @@ import { C, FONT, RADIUS, BORDER } from '../funnel/tokens';
 // send is dry-run by default server-side (OUTBOUND_LIVE_SEND), so this surfaces
 // whatever the API reports (previews when dry, counts when live).
 //
-// MVP templates are inline. TODO(templates): move these to the email_templates
-// table (keyed e.g. 'outbound_*') so they're editable without a code change,
-// mirroring the candidate email templates.
-const TEMPLATES: { key: string; label: string; subject: string; body: string }[] = [
-  {
-    key: 'intro',
-    label: 'Quick intro',
-    subject: 'Quick question, {first_name}',
-    body:
-      "Hi {first_name},\n\nSaw you're at {company} and wanted to reach out — I work with teams hiring for roles in your space and thought it'd be worth connecting.\n\nOpen to a quick chat?\n\nThanks,\nCorey",
-  },
-  {
-    key: 'role',
-    label: 'Specific role',
-    subject: 'A role that might fit, {first_name}',
-    body:
-      "Hi {first_name},\n\nI'm working on a search that looks like a strong match for your background at {company}. Would you be open to hearing the details?\n\nBest,\nCorey",
-  },
-];
+// Templates are DB-backed: read from email_templates (kind='outbound', seeded by
+// the 0004 migration) so the copy is editable without a deploy, mirroring the
+// candidate templates. The seeded rows are blank placeholders — Corey fills them
+// in. Until 0004 is applied the fetch no-ops to [] and we fall back to BLANK so
+// the modal stays usable (the recipient just types subject/body).
+const BLANK: OutboundTemplate = {
+  id: '__blank__',
+  key: '__blank__',
+  label: 'Blank',
+  subject: '',
+  body: '',
+};
 
 export default function ComposeModal({
   contacts,
@@ -38,20 +32,38 @@ export default function ComposeModal({
   onClose: () => void;
   onSent: () => void;
 }) {
-  const [templateKey, setTemplateKey] = useState(TEMPLATES[0].key);
-  const tpl = TEMPLATES.find((t) => t.key === templateKey) ?? TEMPLATES[0];
-  const [subject, setSubject] = useState(tpl.subject);
-  const [body, setBody] = useState(tpl.body);
+  // null = still loading; otherwise the list to drive the dropdown (never empty —
+  // falls back to [BLANK]).
+  const [templates, setTemplates] = useState<OutboundTemplate[] | null>(null);
+  const [templateKey, setTemplateKey] = useState('');
+  const [subject, setSubject] = useState('');
+  const [body, setBody] = useState('');
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const [isError, setIsError] = useState(false);
+
+  // Load the outbound templates once; seed the compose fields from the first one.
+  useEffect(() => {
+    let cancelled = false;
+    listOutboundTemplates().then((res) => {
+      if (cancelled) return;
+      const list = res.ok && res.templates.length ? res.templates : [BLANK];
+      setTemplates(list);
+      setTemplateKey(list[0].key);
+      setSubject(list[0].subject);
+      setBody(list[0].body);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const sendable = contacts.filter((c) => c.email && c.email.includes('@'));
   const noEmail = contacts.length - sendable.length;
 
   const applyTemplate = (key: string) => {
     setTemplateKey(key);
-    const t = TEMPLATES.find((x) => x.key === key);
+    const t = (templates ?? []).find((x) => x.key === key);
     if (t) {
       setSubject(t.subject);
       setBody(t.body);
@@ -133,12 +145,17 @@ export default function ComposeModal({
             style={styles.input}
             value={templateKey}
             onChange={(e) => applyTemplate(e.target.value)}
+            disabled={templates === null}
           >
-            {TEMPLATES.map((t) => (
-              <option key={t.key} value={t.key}>
-                {t.label}
-              </option>
-            ))}
+            {templates === null ? (
+              <option>Loading templates…</option>
+            ) : (
+              templates.map((t) => (
+                <option key={t.key} value={t.key}>
+                  {t.label}
+                </option>
+              ))
+            )}
           </select>
 
           <label style={styles.label}>Subject</label>

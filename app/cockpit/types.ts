@@ -63,6 +63,18 @@ export type EmailTemplate = {
   body: string;
 };
 
+// An Outbound (cold-email) template row from `email_templates` where
+// kind='outbound' (0004 migration). The Outbound compose modal reads these as a
+// set; `label` is the dropdown display name. No greeting — the cold-email flow
+// uses subject + body only, with {first_name}/{company} merge fields.
+export type OutboundTemplate = {
+  id: string;
+  key: string;
+  label: string;
+  subject: string;
+  body: string;
+};
+
 // ── Outreach (Outbound + Referral quadrants, 0003 migration) ────────────────
 // All fields optional/nullable so the cockpit still type-checks and renders
 // before the 0003 migration is applied (mirrors how the funnel columns were

@@ -58,8 +58,9 @@ export default function ContactModal({
           <Field
             label="LinkedIn"
             value={
-              // LinkedIn button — opens the stored profile URL (hyperlink for now;
-              // storage method TBD, see TODO in the placeholder report).
+              // LinkedIn button — opens the contact's stored profile URL in a new
+              // tab. linkedin_url is captured by the CSV parser (app/lib/csv.ts),
+              // persisted on contacts (0003), and rendered here.
               linkedinHref ? (
                 <a
                   href={linkedinHref}

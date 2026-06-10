@@ -8,6 +8,7 @@ import type {
   ContactListType,
   ContactNote,
   ContactWorkHistory,
+  OutboundTemplate,
   Referral,
 } from '../types';
 
@@ -22,6 +23,39 @@ function isMissingOutreachSchema(error: { code?: string; message?: string }): bo
     error?.code === 'PGRST205' ||
     /contacts|contact_work_history|contact_notes|referrals/i.test(error?.message ?? '')
   );
+}
+
+// ── Outbound templates (DB-backed, 0004 migration) ──────────────────────────
+// The Outbound compose copy lives in `email_templates` (kind='outbound') so it's
+// editable without a deploy. Returns the seeded placeholder rows ordered by key.
+// No-ops to [] until 0004 is applied (the kind/label columns 42703 / table absent)
+// so the compose modal falls back to a single blank template and stays usable.
+export async function listOutboundTemplates(): Promise<{
+  ok: boolean;
+  templates: OutboundTemplate[];
+  error?: string;
+}> {
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase
+    .from('email_templates')
+    .select('id, key, label, subject, body')
+    .eq('kind', 'outbound')
+    .order('key', { ascending: true });
+
+  if (error) {
+    if (isMissingOutreachSchema(error)) return { ok: true, templates: [] };
+    return { ok: false, templates: [], error: error.message };
+  }
+  // `label` is nullable in the DB; fall back to the key so the dropdown always
+  // has a display name.
+  const templates = (data ?? []).map((t: any) => ({
+    id: t.id,
+    key: t.key,
+    label: (t.label ?? '').trim() || t.key,
+    subject: t.subject ?? '',
+    body: t.body ?? '',
+  })) as OutboundTemplate[];
+  return { ok: true, templates };
 }
 
 // ── Contacts ────────────────────────────────────────────────────────────────
