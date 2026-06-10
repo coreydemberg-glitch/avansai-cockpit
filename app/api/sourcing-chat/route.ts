@@ -287,7 +287,9 @@ async function searchArchives(clientId: string, input: AnyRec) {
     return {
       archived_at: row.archived_at,
       message_count: row.message_count,
-      messages: picked.slice(0, 40).map((m) => ({
+      // Keep the most-recent slice — session conclusions/final Booleans live at
+      // the end, which is exactly what "what did I explore last time" wants.
+      messages: picked.slice(-40).map((m) => ({
         role: m.role,
         content: String(m.content).slice(0, 400),
       })),
@@ -396,6 +398,12 @@ export async function POST(req: NextRequest) {
     .reverse()
     .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content }));
 
+  // Anthropic requires messages[0] to be a 'user' turn. An even-sized HISTORY_LIMIT
+  // window over a strictly-alternating thread (or an assistant row that survived an
+  // archive race) can start on 'assistant' — trim leading non-user rows. The
+  // just-inserted user message is always the newest row, so this never empties.
+  while (messages.length > 0 && messages[0].role !== 'user') messages.shift();
+
   const anthropic = new Anthropic(); // reads ANTHROPIC_API_KEY from env
 
   try {
@@ -439,7 +447,20 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    const reply = response.content
+    // Round cap hit mid-chain: force one text wrap-up so we don't discard the
+    // turn (a tool_use-stopped response is usually all tool_use blocks, no text).
+    if (response.stop_reason === 'tool_use') {
+      response = await anthropic.messages.create({
+        model: MODEL,
+        max_tokens: 3000,
+        system,
+        tool_choice: { type: 'none' },
+        tools: TOOLS,
+        messages,
+      });
+    }
+
+    let reply = response.content
       .filter((b): b is Anthropic.TextBlock => b.type === 'text')
       .map((b) => b.text)
       .join('')
@@ -450,6 +471,14 @@ export async function POST(req: NextRequest) {
         { error: 'Claude returned an empty reply — try again.' },
         { status: 502 }
       );
+    }
+
+    // Truncated mid-reply: close a dangling ```fence so the capture parser still
+    // works, and tell the recruiter the last Boolean may be incomplete.
+    if (response.stop_reason === 'max_tokens') {
+      if ((reply.match(/```/g) ?? []).length % 2 === 1) reply += '\n```';
+      reply +=
+        '\n\n_[Reply hit the length limit and was cut off — the last Boolean above may be incomplete. Ask me to continue.]_';
     }
 
     const { data: saved, error: replyErr } = await supabase

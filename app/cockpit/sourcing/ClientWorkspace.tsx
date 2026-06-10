@@ -5,7 +5,7 @@
 // a persistent Claude chat with Apollo tools, and a right-rail table of
 // captured Booleans. Closing the window auto-archives the chat to Supabase
 // unless Brain Buzz is ON — the server re-checks the toggle from the DB.
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { C, FONT, RADIUS, BORDER } from '../funnel/tokens';
 import type { BooleanRow, SourcingClient, SourcingMessage } from './types';
 
@@ -33,6 +33,14 @@ export default function ClientWorkspace({
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [closing, setClosing] = useState(false);
 
+  // Booleans already in the table — disables the capture arrow for those across
+  // remounts (the per-key `captured` Set is ephemeral). Server stores trimmed
+  // strings and the parser trims too, so exact-match dedup is safe.
+  const savedStrings = useMemo(
+    () => new Set(booleans.map((b) => b.boolean_string)),
+    [booleans]
+  );
+
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // ── Load thread + booleans ────────────────────────────────────────────────
@@ -56,6 +64,23 @@ export default function ClientWorkspace({
     return () => {
       cancelled = true;
     };
+  }, [client.id]);
+
+  // Archive on tab close / refresh too — handleClose only fires on the in-app
+  // close button or backdrop. sendBeacon survives page teardown; the server
+  // re-checks Brain Buzz and no-ops on empty threads, so this is safe to fire
+  // unconditionally.
+  useEffect(() => {
+    const onPageHide = () => {
+      navigator.sendBeacon?.(
+        '/api/sourcing-archive',
+        new Blob([JSON.stringify({ client_id: client.id })], {
+          type: 'application/json',
+        })
+      );
+    };
+    window.addEventListener('pagehide', onPageHide);
+    return () => window.removeEventListener('pagehide', onPageHide);
   }, [client.id]);
 
   // Keep the chat pinned to the latest message.
@@ -144,7 +169,9 @@ export default function ClientWorkspace({
 
   // ── Boolean capture (arrow next to a delivered Boolean) ──────────────────
   const capture = async (key: string, value: string) => {
-    if (captured.has(key)) return;
+    // Block both a rapid double-click (key) and re-capturing a Boolean already
+    // in the table on a later visit (value) — the per-key Set resets on remount.
+    if (captured.has(key) || savedStrings.has(value)) return;
     const res = await fetch('/api/sourcing-booleans', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -186,6 +213,7 @@ export default function ClientWorkspace({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ client_id: client.id }),
+        keepalive: true,
       });
     } catch {
       /* archive failure shouldn't trap the user in the modal */
@@ -267,6 +295,7 @@ export default function ClientWorkspace({
                           msgId={m.id}
                           content={m.content}
                           captured={captured}
+                          savedStrings={savedStrings}
                           onCapture={capture}
                         />
                       </div>
@@ -368,11 +397,13 @@ function AssistantContent({
   msgId,
   content,
   captured,
+  savedStrings,
   onCapture,
 }: {
   msgId: string;
   content: string;
   captured: Set<string>;
+  savedStrings: Set<string>;
   onCapture: (key: string, value: string) => void;
 }) {
   const parts: { type: 'text' | 'code'; value: string }[] = [];
@@ -401,7 +432,7 @@ function AssistantContent({
           );
         }
         const key = `${msgId}:${i}`;
-        const done = captured.has(key);
+        const done = captured.has(key) || savedStrings.has(part.value);
         return (
           <div key={i} style={styles.boolBlock}>
             <code style={styles.boolCode}>{part.value}</code>
