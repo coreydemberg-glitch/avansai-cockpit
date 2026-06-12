@@ -17,8 +17,8 @@ import type {
   JobDescription,
 } from './types';
 import {
-  saveNotes,
   saveLinkedin,
+  saveBullhornId,
   listJobDescriptions,
   getEmailTemplate,
   setCandidateArchived,
@@ -42,6 +42,14 @@ import PrepLibrary from './jobs/PrepLibrary';
 import SourcingView from './sourcing/SourcingView';
 import CandidatesView from './candidates/CandidatesView';
 import CandidatesTodoPanel from './candidates/CandidatesTodoPanel';
+import CandidateNotesStudio from './candidates/CandidateNotesStudio';
+
+// Bullhorn deep-link for a candidate's record (East swimlane / cls43). Null
+// when no bullhorn_id is linked yet (the card then signals "create a profile").
+const BULLHORN_BASE =
+  'https://cls43.bullhornstaffing.com/BullhornStaffing/OpenWindow.cfm?Entity=Candidate&id=';
+const bullhornUrl = (id: string | null | undefined) =>
+  id && id.trim() ? `${BULLHORN_BASE}${encodeURIComponent(id.trim())}` : null;
 
 // Which top-level section the cockpit is showing. In-page view switching (no
 // routing) — matches the codebase's existing local-state model and keeps the
@@ -402,7 +410,13 @@ export default function CockpitBoard({
             jobs={jobs}
             context={selectedContext}
             onChanged={() => router.refresh()}
-            onClose={() => setSelected(null)}
+            onTodoRaised={bumpTodos}
+            onClose={() => {
+              setSelected(null);
+              // Refetch rows so a quick reopen seeds from the just-saved notes
+              // (the studio's localStorage draft covers the in-flight window).
+              router.refresh();
+            }}
           />
         )}
       </main>
@@ -417,7 +431,11 @@ export default function CockpitBoard({
           {section === 'dashboard' ? (
             <ActionItemsPanel autoItems={actionItems} onOpen={openById} />
           ) : (
-            <CandidatesTodoPanel refreshKey={todoRefresh} />
+            <CandidatesTodoPanel
+              refreshKey={todoRefresh}
+              candidates={rows}
+              onOpenCandidate={(id) => openById(id, null)}
+            />
           )}
         </aside>
       )}
@@ -503,111 +521,25 @@ function CandidateModal({
   jobs,
   context,
   onChanged,
+  onTodoRaised,
   onClose,
 }: {
   candidate: Candidate;
   jobs: JobDescription[];
   context: ActionContext | null;
   onChanged: () => void;
+  // Bump the hub To-Do rail when the notes studio raises a to-do.
+  onTodoRaised: () => void;
   onClose: () => void;
 }) {
-  // The funnel context decides the opening tab + email mode.
-  type Tab = 'email' | 'notes' | 'feedback' | 'resume' | 'linkedin';
+  // The funnel context decides the opening tab + email mode. Notes (the live
+  // studio) is the default when the card is opened plainly from the hub.
+  type Tab = 'email' | 'notes' | 'feedback' | 'resume' | 'linkedin' | 'bullhorn';
   const initialTab: Tab =
     context === 'feedback' ? 'feedback' : context ? 'email' : 'notes';
   const [activeTab, setActiveTab] = useState<Tab>(initialTab);
   const emailMode: EmailMode =
     context === 'prep' ? 'prep' : context === 'thankyou' ? 'thankyou' : 'follow_up';
-
-  // ── Notes: debounced auto-save + a local draft that survives close/reopen ──
-  const draftKey = `cockpit:notes-draft:${candidate.id}`;
-  const [notes, setNotes] = useState(candidate.notes ?? '');
-  type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
-  const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
-  const [isPending, startTransition] = useTransition();
-  const [cleaned, setCleaned] = useState<string | null>(null);
-  const [cleaning, setCleaning] = useState(false);
-  const [cleanErr, setCleanErr] = useState<string | null>(null);
-  const lastSavedRef = useRef(candidate.notes ?? '');
-  const notesHydrated = useRef(false);
-
-  // Restore an unsaved local draft when the card opens, so edits the recruiter
-  // didn't explicitly save still reappear on reopen.
-  useEffect(() => {
-    try {
-      const draft = window.localStorage.getItem(draftKey);
-      if (draft != null && draft !== (candidate.notes ?? '')) setNotes(draft);
-    } catch {
-      /* localStorage unavailable — fall back to the server value */
-    }
-    notesHydrated.current = true;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Auto-save 2.5s after the last keystroke. The draft is mirrored to
-  // localStorage on every change first, so closing mid-edit never loses work.
-  useEffect(() => {
-    if (!notesHydrated.current) return; // skip the initial restore pass
-    try {
-      window.localStorage.setItem(draftKey, notes);
-    } catch {
-      /* ignore */
-    }
-    if (notes === lastSavedRef.current) return;
-    setSaveStatus('saving');
-    const t = setTimeout(async () => {
-      const res = await saveNotes(candidate.id, notes);
-      if (res.ok) {
-        lastSavedRef.current = notes;
-        setSaveStatus('saved');
-      } else {
-        setSaveStatus('error');
-      }
-    }, 2500);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [notes]);
-
-  const handleClean = async () => {
-    setCleanErr(null);
-    setCleaning(true);
-    try {
-      const res = await fetch('/api/clean-notes', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ notes }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to clean notes');
-      setCleaned(data.structured);
-    } catch (e) {
-      setCleanErr(e instanceof Error ? e.message : 'Failed to clean notes');
-    } finally {
-      setCleaning(false);
-    }
-  };
-
-  // Flush the current notes immediately (the debounce also saves on its own).
-  const handleSaveNow = () => {
-    setSaveStatus('saving');
-    startTransition(async () => {
-      const res = await saveNotes(candidate.id, notes);
-      if (res.ok) {
-        lastSavedRef.current = notes;
-        setSaveStatus('saved');
-      } else {
-        setSaveStatus('error');
-      }
-    });
-  };
-
-  // Promote the AI-cleaned version to BE the notes, so the raw text doesn't
-  // linger alongside it (no duplication). Auto-save then persists the result.
-  const applyCleaned = () => {
-    if (cleaned == null) return;
-    setNotes(cleaned);
-    setCleaned(null);
-  };
 
   // ── Interview feedback (clean-notes mode:'feedback' → save to file) ──
   const [rawFeedback, setRawFeedback] = useState('');
@@ -841,6 +773,29 @@ function CandidateModal({
     setLinkedinSaving(false);
   };
 
+  // ── Bullhorn (candidate-card §3): link an existing record id; the button
+  // then deep-links to the profile. Nothing auto-creates a profile yet (the
+  // extractor is read-only, no live write creds) — so when unlinked the tab
+  // signals that a profile needs creating. Paste the id to link it now. ──
+  const [bullhornId, setBullhornId] = useState(candidate.bullhorn_id ?? '');
+  const [savedBullhornId, setSavedBullhornId] = useState(candidate.bullhorn_id ?? '');
+  const [bullhornSaving, setBullhornSaving] = useState(false);
+  const [bullhornMsg, setBullhornMsg] = useState<string | null>(null);
+  const handleSaveBullhorn = async () => {
+    setBullhornMsg(null);
+    setBullhornSaving(true);
+    const res = await saveBullhornId(candidate.id, bullhornId.trim());
+    if (res.ok) {
+      setSavedBullhornId(bullhornId.trim());
+      setBullhornMsg('Linked ✓');
+      onChanged();
+    } else {
+      setBullhornMsg(`Error: ${res.error ?? 'unknown'}`);
+    }
+    setBullhornSaving(false);
+  };
+  const bhUrl = bullhornUrl(savedBullhornId);
+
   const resumeName = resumeUrl
     ? decodeURIComponent(resumeUrl.split('/').pop() || 'resume').replace(/^\d+-/, '')
     : null;
@@ -849,7 +804,7 @@ function CandidateModal({
   return (
     <div style={styles.overlay} onClick={onClose}>
       <div
-        style={styles.modal}
+        style={{ ...styles.modal, ...(activeTab === 'notes' ? styles.modalWide : null) }}
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -886,6 +841,7 @@ function CandidateModal({
               { key: 'resume', icon: 'ti-file-cv', label: 'Resume' },
               { key: 'linkedin', icon: 'ti-brand-linkedin', label: 'LinkedIn' },
               { key: 'feedback', icon: 'ti-message-2', label: 'Feedback' },
+              { key: 'bullhorn', icon: 'ti-database', label: 'Bullhorn' },
             ] as const
           ).map((t) => (
             <button
@@ -900,47 +856,11 @@ function CandidateModal({
 
         <div style={styles.tabContent}>
           {activeTab === 'notes' && (
-            <>
-              <div style={styles.notesLabelRow}>
-                <label style={styles.label}>Notes</label>
-                <SaveIndicator status={saveStatus} />
-              </div>
-              <textarea
-                style={styles.textarea}
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                placeholder="Add notes about this candidate… (auto-saves as you type)"
-                rows={6}
-              />
-              <div style={styles.saveRow}>
-                <button
-                  style={styles.secondaryBtn}
-                  onClick={handleClean}
-                  disabled={cleaning || notes.trim().length === 0}
-                >
-                  {cleaning ? 'Cleaning…' : cleaned ? 'Re-clean notes' : 'Clean notes'}
-                </button>
-                <button
-                  style={styles.secondaryBtn}
-                  onClick={handleSaveNow}
-                  disabled={isPending || saveStatus === 'saving'}
-                >
-                  Save now
-                </button>
-              </div>
-              {cleanErr && <p style={styles.errMsg}>{cleanErr}</p>}
-              {cleaned !== null && (
-                <div style={styles.cleanedBox}>
-                  <div style={styles.cleanedHead}>
-                    <span style={styles.cleanedLabel}>Structured (AI cleanup)</span>
-                    <button style={styles.primaryBtnSm} onClick={applyCleaned}>
-                      Use cleaned — replace notes
-                    </button>
-                  </div>
-                  <div style={styles.cleanedText}>{cleaned}</div>
-                </div>
-              )}
-            </>
+            <CandidateNotesStudio
+              candidate={candidate}
+              onTodoRaised={onTodoRaised}
+              onChanged={onChanged}
+            />
           )}
 
           {activeTab === 'feedback' && (
@@ -1168,6 +1088,63 @@ function CandidateModal({
               )}
             </div>
           )}
+
+          {activeTab === 'bullhorn' && (
+            <div style={styles.sectionCol}>
+              {bhUrl ? (
+                <>
+                  <a
+                    href={bhUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={styles.bullhornBtn}
+                  >
+                    <i className="ti ti-database" aria-hidden /> Open in Bullhorn
+                    <span aria-hidden> ↗</span>
+                  </a>
+                  <p style={styles.fieldValue}>Linked record id: {savedBullhornId}</p>
+                  <button style={styles.linkText} onClick={() => setSavedBullhornId('')}>
+                    Edit / unlink
+                  </button>
+                </>
+              ) : (
+                <>
+                  <div style={styles.bullhornWarn}>
+                    <i className="ti ti-alert-triangle" aria-hidden /> No Bullhorn
+                    profile linked. Auto-creation from Trello isn’t wired yet (the
+                    Bullhorn integration is read-only and has no live write
+                    credentials) — paste an existing record id to link it now.
+                  </div>
+                  <label style={styles.label}>Bullhorn record id</label>
+                  <input
+                    style={styles.input}
+                    value={bullhornId}
+                    onChange={(e) => setBullhornId(e.target.value)}
+                    placeholder="e.g. 24681"
+                  />
+                  <div style={styles.saveRow}>
+                    <button
+                      style={styles.primaryBtn}
+                      onClick={handleSaveBullhorn}
+                      disabled={bullhornSaving || !bullhornId.trim()}
+                    >
+                      {bullhornSaving ? 'Linking…' : 'Link profile'}
+                    </button>
+                    {bullhornMsg && (
+                      <span
+                        style={{
+                          ...styles.saveMsg,
+                          color: bullhornMsg.startsWith('Error') ? '#f87171' : C.green,
+                        }}
+                      >
+                        {bullhornMsg}
+                      </span>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -1211,27 +1188,6 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
       <dt style={styles.fieldLabel}>{label}</dt>
       <dd style={styles.fieldValue}>{value}</dd>
     </div>
-  );
-}
-
-// Inline auto-save status for the notes panel (no buttons-as-text).
-function SaveIndicator({
-  status,
-}: {
-  status: 'idle' | 'saving' | 'saved' | 'error';
-}) {
-  if (status === 'idle') return null;
-  const map = {
-    saving: { dot: C.amber, text: 'Saving…' },
-    saved: { dot: C.green, text: 'All changes saved' },
-    error: { dot: '#f87171', text: 'Save failed — retrying on next edit' },
-  } as const;
-  const s = map[status];
-  return (
-    <span style={styles.saveIndicator}>
-      <span style={{ ...styles.saveDot, background: s.dot }} aria-hidden />
-      {s.text}
-    </span>
   );
 }
 
@@ -1379,10 +1335,15 @@ const styles: Record<string, React.CSSProperties> = {
   },
   link: { color: C.green, textDecoration: 'none' },
 
+  // Frosted-glass / acetate backdrop — the cockpit shows through, faintly
+  // blurred (candidate-card §1). Falls back to a plain dim where the browser
+  // doesn't support backdrop-filter.
   overlay: {
     position: 'fixed',
     inset: 0,
-    background: 'rgba(0,0,0,0.62)',
+    background: 'rgba(7,7,9,0.55)',
+    backdropFilter: 'blur(8px) saturate(120%)',
+    WebkitBackdropFilter: 'blur(8px) saturate(120%)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -1401,6 +1362,9 @@ const styles: Record<string, React.CSSProperties> = {
     color: C.white,
     fontFamily: FONT,
   },
+  // Wider footprint for the Notes tab so the dual-panel studio + command bar
+  // (candidate-card §4/§6) have room to breathe.
+  modalWide: { maxWidth: 'min(1040px, 96vw)' },
   modalHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' },
   modalTitle: { margin: 0, fontSize: 18, fontWeight: 700, letterSpacing: '-0.01em', color: C.white },
   modalSub: { margin: '4px 0 0', color: C.muted, fontSize: 13 },
@@ -1502,7 +1466,7 @@ const styles: Record<string, React.CSSProperties> = {
     color: C.white,
     boxSizing: 'border-box',
   },
-  tabBar: { display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 6, marginBottom: 18 },
+  tabBar: { display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 6, marginBottom: 18 },
   tab: {
     padding: '9px 6px',
     border: BORDER,
@@ -1555,5 +1519,32 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 12,
     fontFamily: 'inherit',
     textDecoration: 'underline',
+  },
+  // Bullhorn deep-link button (candidate-card §3). Brand-green like the cockpit.
+  bullhornBtn: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 8,
+    alignSelf: 'flex-start',
+    padding: '9px 16px',
+    borderRadius: RADIUS.button,
+    background: C.green,
+    color: C.bg,
+    textDecoration: 'none',
+    fontSize: 13,
+    fontWeight: 700,
+  },
+  bullhornWarn: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    gap: 8,
+    fontSize: 12.5,
+    lineHeight: 1.5,
+    color: C.amber,
+    background: `${C.amber}14`,
+    border: `1px solid ${C.amber}40`,
+    borderRadius: RADIUS.chip,
+    padding: '10px 12px',
+    marginBottom: 4,
   },
 };

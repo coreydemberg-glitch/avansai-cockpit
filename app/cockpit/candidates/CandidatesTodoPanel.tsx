@@ -5,18 +5,48 @@
 // candidate-hub to-dos (manual + candidate-scoped) and renders them BOLD. It
 // never shows Sourcing to-dos, and the home master never collapses into here —
 // no cross-bleed. Refetches whenever `refreshKey` changes (a bar raises a to-do).
-import { useEffect, useState } from 'react';
-import type { ActionItem } from '../types';
+import { useEffect, useMemo, useState } from 'react';
+import type { ActionItem, Candidate } from '../types';
 import { C, FONT, RADIUS, BORDER } from '../funnel/tokens';
 import { listCandidateTodos } from './actions';
 import { removeActionItem } from '../funnel/actionItemActions';
 
 export default function CandidatesTodoPanel({
   refreshKey,
+  candidates,
+  onOpenCandidate,
 }: {
   refreshKey: number;
+  candidates: Candidate[];
+  // Jump back to the candidate (opens the modal) — the §2 "source" link.
+  onOpenCandidate: (id: string) => void;
 }) {
   const [items, setItems] = useState<ActionItem[]>([]);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const candById = useMemo(
+    () => new Map(candidates.map((c) => [c.id, c])),
+    [candidates]
+  );
+
+  // §2 copy module: drop the candidate's CLEANED notes onto the clipboard
+  // (falls back to raw notes, then the to-do title, so it works before 0008 is
+  // applied). Built for end-of-week documentation: open rail → copy → paste.
+  async function copyNotes(it: ActionItem) {
+    const cand = it.candidate_id ? candById.get(it.candidate_id) : null;
+    const text = (
+      cand?.notes_clean?.trim() ||
+      cand?.notes?.trim() ||
+      it.title ||
+      ''
+    ).trim();
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedId(it.id);
+      setTimeout(() => setCopiedId(null), 1500);
+    } catch {
+      /* clipboard unavailable */
+    }
+  }
 
   useEffect(() => {
     let live = true;
@@ -56,14 +86,40 @@ export default function CandidatesTodoPanel({
               <li key={it.id}>
                 <div style={styles.row}>
                   <span style={styles.text}>{it.title}</span>
-                  <button
-                    type="button"
-                    style={styles.removeBtn}
-                    onClick={() => void handleRemove(it.id)}
-                    aria-label="Remove to-do"
-                  >
-                    ✕
-                  </button>
+                  <div style={styles.rowActions}>
+                    <button
+                      type="button"
+                      style={styles.copyBtn}
+                      onClick={() => void copyNotes(it)}
+                      title="Copy cleaned notes to clipboard"
+                      aria-label="Copy cleaned notes"
+                    >
+                      <i
+                        className={`ti ${copiedId === it.id ? 'ti-check' : 'ti-copy'}`}
+                        style={copiedId === it.id ? { color: C.green } : undefined}
+                        aria-hidden
+                      />
+                    </button>
+                    {it.candidate_id && (
+                      <button
+                        type="button"
+                        style={styles.openBtn}
+                        onClick={() => onOpenCandidate(it.candidate_id as string)}
+                        title="Open candidate"
+                        aria-label="Open candidate"
+                      >
+                        <i className="ti ti-external-link" aria-hidden />
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      style={styles.removeBtn}
+                      onClick={() => void handleRemove(it.id)}
+                      aria-label="Remove to-do"
+                    >
+                      ✕
+                    </button>
+                  </div>
                 </div>
               </li>
             ))}
@@ -156,6 +212,41 @@ const styles: Record<string, React.CSSProperties> = {
     color: C.white,
     lineHeight: 1.35,
     wordBreak: 'break-word',
+  },
+  rowActions: { display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 },
+  copyBtn: {
+    flexShrink: 0,
+    width: 22,
+    height: 22,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontSize: 12,
+    color: C.green,
+    background: `${C.green}14`,
+    border: `1px solid ${C.green}40`,
+    borderRadius: 6,
+    cursor: 'pointer',
+    fontFamily: FONT,
+    lineHeight: 1,
+    padding: 0,
+  },
+  openBtn: {
+    flexShrink: 0,
+    width: 22,
+    height: 22,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontSize: 12,
+    color: C.muted,
+    background: C.panelHi,
+    border: BORDER,
+    borderRadius: 6,
+    cursor: 'pointer',
+    fontFamily: FONT,
+    lineHeight: 1,
+    padding: 0,
   },
   removeBtn: {
     flexShrink: 0,
