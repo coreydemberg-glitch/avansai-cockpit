@@ -9,6 +9,13 @@ export type Candidate = {
   resume: string | null;
   trello_card_id: string | null;
   notes: string | null;
+  // AI-cleaned candidate summary from the live notes studio (right panel).
+  // Persisted apart from raw `notes` so the To-Do copy module can lift the
+  // clean version. Optional — added in 0008, guarded for pre-migration rows.
+  notes_clean?: string | null;
+  // Bullhorn record id for the card's Bullhorn deep-link button. Optional —
+  // added in 0008; null = no profile linked yet. (See 0008 migration.)
+  bullhorn_id?: string | null;
   status: string | null;
   // Hidden from the cockpit when Corey is removed from the Trello card.
   // Recoverable: the row stays; re-adding him on Trello sets this back to false.

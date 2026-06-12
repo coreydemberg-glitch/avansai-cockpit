@@ -9,10 +9,9 @@
 // about the Supabase/Trello plumbing changed; only where the bars are displayed.
 import { useEffect, useState } from 'react';
 import type { Candidate } from '../types';
-import { C, FONT, RADIUS, BORDER } from '../funnel/tokens';
+import { C, FONT, BORDER } from '../funnel/tokens';
 import CandidateRow from '../funnel/CandidateSlider';
-import CandidateChat from './CandidateChat';
-import { addCandidateTodo, ensureCandidateSignalTodos } from './actions';
+import { ensureCandidateSignalTodos } from './actions';
 
 // §3 signal title — what notes/résumé is on file for a candidate.
 function signalTitle(c: Candidate): string {
@@ -39,7 +38,6 @@ export default function CandidatesView({
   onTodoChanged: () => void;
 }) {
   const [view, setView] = useState<'active' | 'archived'>('active');
-  const [openChatId, setOpenChatId] = useState<string | null>(null);
 
   const active = candidates.filter((c) => !c.archived);
   const archived = candidates.filter((c) => c.archived);
@@ -68,13 +66,6 @@ export default function CandidatesView({
     ensureCandidateSignalTodos(items).then(() => onTodoChanged());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [signalKey]);
-
-  // §4 green-arrow capture → raise the BOLD to-do + collapse the bar.
-  const handleCapture = async (c: Candidate) => {
-    await addCandidateTodo(c.id, `${c.name || 'Candidate'} — review notes`);
-    onTodoChanged();
-    setOpenChatId(null);
-  };
 
   return (
     <div style={styles.wrap}>
@@ -111,29 +102,20 @@ export default function CandidatesView({
       ) : (
         <div style={styles.list}>
           {shown.map((c) => (
-            <div key={c.id}>
-              <CandidateRow
-                candidate={c}
-                archived={view === 'archived'}
-                onCommit={onCommit}
-                onOpenDetail={onOpenDetail}
-                onArchive={onArchive}
-                onToggleChat={
-                  view === 'archived'
-                    ? undefined
-                    : (cand) =>
-                        setOpenChatId((cur) => (cur === cand.id ? null : cand.id))
-                }
-                chatOpen={openChatId === c.id}
-              />
-              {openChatId === c.id && view === 'active' && (
-                <CandidateChat
-                  candidate={c}
-                  onCapture={handleCapture}
-                  onClose={() => setOpenChatId(null)}
-                />
-              )}
-            </div>
+            <CandidateRow
+              key={c.id}
+              candidate={c}
+              archived={view === 'archived'}
+              onCommit={onCommit}
+              onOpenDetail={onOpenDetail}
+              onArchive={onArchive}
+              // Clicking the bar (or its Notes icon) now opens the candidate
+              // MODAL — its Notes tab is the live dual-panel studio. Keeps the
+              // bar in hub mode (trailing LinkedIn/Notes/Résumé icons) without
+              // the old inline dropdown.
+              onToggleChat={view === 'archived' ? undefined : onOpenDetail}
+              chatOpen={false}
+            />
           ))}
         </div>
       )}

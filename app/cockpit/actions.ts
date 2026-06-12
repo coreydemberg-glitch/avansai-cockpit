@@ -47,6 +47,52 @@ export async function saveNotes(
   return { ok: true };
 }
 
+// Persist the AI-cleaned candidate summary (right panel of the notes studio)
+// into the `notes_clean` column (0008). Kept separate from raw `notes` so the
+// To-Do copy module can lift the clean version. No-ops cleanly (ok:true) when
+// the column isn't migrated yet, so the studio's live cleaning still works
+// in-memory — only persistence (and the later copy) waits on 0008.
+export async function saveCleanNotes(
+  id: string,
+  notesClean: string
+): Promise<ActionResult> {
+  const supabase = getSupabaseAdmin();
+  const { error } = await supabase
+    .from('candidates')
+    .update({ notes_clean: notesClean })
+    .eq('id', id);
+
+  if (error) {
+    if (isMissingFunnelSchema(error)) return { ok: true };
+    return { ok: false, error: error.message };
+  }
+
+  revalidatePath('/cockpit');
+  return { ok: true };
+}
+
+// Link a candidate to a Bullhorn record id (0008) — powers the card's Bullhorn
+// deep-link button. Pass '' to unlink. No-ops cleanly when the column isn't
+// migrated yet (same convention as the funnel columns).
+export async function saveBullhornId(
+  id: string,
+  bullhornId: string
+): Promise<ActionResult> {
+  const supabase = getSupabaseAdmin();
+  const { error } = await supabase
+    .from('candidates')
+    .update({ bullhorn_id: bullhornId.trim() || null })
+    .eq('id', id);
+
+  if (error) {
+    if (isMissingFunnelSchema(error)) return { ok: true };
+    return { ok: false, error: error.message };
+  }
+
+  revalidatePath('/cockpit');
+  return { ok: true };
+}
+
 // List every job description, alphabetised for the email panel's picker.
 // Re-fetched by the client after a new JD is uploaded so it appears immediately.
 export async function listJobDescriptions(): Promise<{
