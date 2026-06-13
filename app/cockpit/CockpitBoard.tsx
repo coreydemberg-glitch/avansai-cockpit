@@ -608,10 +608,11 @@ function CandidateModal({
   // Set once the résumé parser fills the greeting, so template prefill defers to it.
   const emailFromResume = useRef(false);
 
-  // JD library with resolved public URLs, for the visual attachment picker (#6).
-  // Same source DocLibrary reads — the client has no SUPABASE_URL to build storage
-  // URLs, so /api/job-descriptions resolves them. Falls back silently to the
-  // `jobs` prop (titles only) if the fetch fails.
+  // Resolved public URLs for the visual attachment picker (#6). The client has no
+  // SUPABASE_URL to build storage URLs, so /api/job-descriptions resolves them.
+  // This is ONLY the preview-thumbnail source — the pickable tiles render from the
+  // always-present SSR `jobs` prop (see jdTiles below), so attachment still works
+  // if this client fetch fails or hasn't resolved (tiles just show a placeholder).
   type JdDoc = { id: string; title: string; file_path: string; public_url: string };
   const [jdDocs, setJdDocs] = useState<JdDoc[]>([]);
   useEffect(() => {
@@ -626,6 +627,14 @@ function CandidateModal({
       live = false;
     };
   }, []);
+  // Pickable tiles come from the SSR `jobs` prop (always present); the fetched
+  // public_url just lights up the PDF preview when available.
+  const jdTiles = jobs.map((j) => ({
+    id: j.id,
+    title: j.title,
+    file_path: j.file_path,
+    public_url: jdDocs.find((d) => d.id === j.id)?.public_url ?? '',
+  }));
 
   // Prefill the email panel once, based on the mode. follow-up/thankyou pull a DB
   // template (editable without code); prep falls back to a per-stage default if no
@@ -1045,7 +1054,7 @@ function CandidateModal({
                   </span>
                   <span style={styles.jdTitle}>No attachment</span>
                 </button>
-                {jdDocs.map((j) => {
+                {jdTiles.map((j) => {
                   const selected = j.id === selectedJobId;
                   return (
                     <button
@@ -1056,13 +1065,23 @@ function CandidateModal({
                       title={j.title}
                     >
                       <div style={styles.jdPreviewBox}>
-                        <object
-                          data={`${j.public_url}#toolbar=0&navpanes=0&view=FitH`}
-                          type="application/pdf"
-                          style={styles.jdPreviewObject}
-                          aria-label={j.title}
-                        />
-                        <div style={styles.jdPreviewOverlay} />
+                        {j.public_url ? (
+                          <>
+                            <object
+                              data={`${j.public_url}#toolbar=0&navpanes=0&view=FitH`}
+                              type="application/pdf"
+                              style={styles.jdPreviewObject}
+                              aria-label={j.title}
+                            />
+                            <div style={styles.jdPreviewOverlay} />
+                          </>
+                        ) : (
+                          // Preview URL not resolved yet / fetch failed — still
+                          // selectable, just shows a document placeholder.
+                          <div style={styles.jdPreviewPlaceholder}>
+                            <i className="ti ti-file-text" aria-hidden />
+                          </div>
+                        )}
                         {selected && (
                           <span style={styles.jdSelectedBadge} aria-hidden>
                             <i className="ti ti-check" />
@@ -1725,6 +1744,16 @@ const styles: Record<string, React.CSSProperties> = {
   jdPreviewBox: { position: 'relative', height: 96, overflow: 'hidden', background: C.panel2 },
   jdPreviewObject: { width: '100%', height: '100%', border: 'none', pointerEvents: 'none' },
   jdPreviewOverlay: { position: 'absolute', inset: 0, background: 'transparent' },
+  jdPreviewPlaceholder: {
+    width: '100%',
+    height: '100%',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    color: C.muted2,
+    fontSize: 26,
+    background: C.panel,
+  },
   jdSelectedBadge: {
     position: 'absolute',
     top: 4,
