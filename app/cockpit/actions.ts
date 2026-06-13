@@ -133,6 +133,47 @@ export async function getEmailTemplate(
   return { ok: true, template: data as EmailTemplate };
 }
 
+// Remove a candidate's résumé (Candidate Hub tweak): clear the `resume` column
+// and best-effort delete the stored object. The URL stored is the bucket's public
+// URL, so we recover the object path from the segment after the bucket name. A
+// failed storage delete only logs (worst case: one orphaned file) — the row is
+// what the cockpit reads, so clearing it is what matters.
+const RESUME_BUCKET = 'resumes';
+export async function removeResume(id: string): Promise<ActionResult> {
+  const supabase = getSupabaseAdmin();
+
+  const { data, error: readErr } = await supabase
+    .from('candidates')
+    .select('resume')
+    .eq('id', id)
+    .maybeSingle();
+  if (readErr) return { ok: false, error: readErr.message };
+
+  const { error } = await supabase
+    .from('candidates')
+    .update({ resume: null })
+    .eq('id', id);
+  if (error) return { ok: false, error: error.message };
+
+  const url = data?.resume as string | null | undefined;
+  if (url) {
+    const marker = `/${RESUME_BUCKET}/`;
+    const idx = url.indexOf(marker);
+    if (idx !== -1) {
+      const path = decodeURIComponent(url.slice(idx + marker.length));
+      const { error: rmErr } = await supabase.storage
+        .from(RESUME_BUCKET)
+        .remove([path]);
+      if (rmErr) {
+        console.error('removeResume: storage remove failed for', path, rmErr.message);
+      }
+    }
+  }
+
+  revalidatePath('/cockpit');
+  return { ok: true };
+}
+
 // Archive (hide) or restore a candidate in the cockpit. This only flips a flag
 // on the Supabase row — it never touches Trello. Reversible: pass archived=false
 // to bring it back.

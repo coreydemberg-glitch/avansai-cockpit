@@ -21,7 +21,10 @@ const MODEL = 'claude-sonnet-4-6';
 //                 (as JSON) that drives the green completeness bar (§5).
 // Same model + same call shape; only the system prompt (and live's JSON parse)
 // differs.
-type Mode = 'submittal' | 'feedback' | 'live';
+//   'resume'    — parse a résumé into a concise background block for the
+//                 recruiter's working RAW NOTES (Candidate Hub tweak: "parse the
+//                 résumé into the raw notes"). Input is the résumé, not notes.
+type Mode = 'submittal' | 'feedback' | 'live' | 'resume';
 
 // Required candidate fields the live cleaner tracks → the keys the green
 // completeness bar fills against (§5). Kept here so the prompt, the response
@@ -102,6 +105,15 @@ RULES:
 - Compensation numbers and dates come from the notes EXACTLY as written — never alter them.
 - Additional notes: do NOT delete, omit, condense, or reword anything. Spelling and grammar fixes ONLY.`;
 
+// Résumé → working-notes parser. Turns a résumé into a concise, factual
+// background block the recruiter can drop straight into their RAW NOTES (which
+// then feed the submittal). Plain text, no Markdown — it renders in a textarea.
+const RESUME_PROMPT = `You parse a candidate's résumé into a concise background block for a recruiter's working notes — what they'd jot before writing a client submittal. The résumé text is inside <resume> tags.
+
+Output ONLY a clean plain-text block. Use short Title-case labels each followed by "- " bullets. Do NOT use Markdown symbols (#, *, **). Be strictly factual — never invent anything that is not in the résumé, and omit anything the résumé does not contain.
+
+Cover, when present: current role & company, total experience / seniority, key skills & technologies, notable past companies and projects, education, and location. Keep it tight — this is a working note, not a full profile. No preamble and no closing remarks.`;
+
 // Real-time notes cleaner (candidate-card §4 / Appendix A). Authoritative system
 // prompt: it cleans raw live-typed notes into a stable Markdown summary AND
 // reports which required fields are captured, as a single JSON object so the
@@ -157,6 +169,7 @@ const PROMPTS: Record<Mode, string> = {
   submittal: SUBMITTAL_PROMPT,
   feedback: FEEDBACK_PROMPT,
   live: LIVE_PROMPT,
+  resume: RESUME_PROMPT,
 };
 
 // Anti-injection / authority guard appended to EVERY prompt (candidate-card §7).
@@ -220,14 +233,22 @@ export async function POST(req: NextRequest) {
 
   // Default to the original submittal behaviour so existing callers are unaffected.
   const selectedMode: Mode =
-    mode === 'feedback' ? 'feedback' : mode === 'live' ? 'live' : 'submittal';
+    mode === 'feedback'
+      ? 'feedback'
+      : mode === 'live'
+        ? 'live'
+        : mode === 'resume'
+          ? 'resume'
+          : 'submittal';
 
   // Optional résumé text (submittal + live modes): the submittal cleaner bakes the
   // résumé into the client email per its prompt ("pull facts from BOTH"); live
   // seeds the field buckets the moment a résumé is dropped. Capped to keep each
   // re-clean small. Treated as untrusted DATA, exactly like the notes.
   const resume =
-    (selectedMode === 'submittal' || selectedMode === 'live') &&
+    (selectedMode === 'submittal' ||
+      selectedMode === 'live' ||
+      selectedMode === 'resume') &&
     typeof resumeText === 'string'
       ? resumeText.slice(0, 12000).trim()
       : '';
@@ -261,7 +282,14 @@ export async function POST(req: NextRequest) {
       messages: [
         {
           role: 'user',
-          content: resume ? `${wrapNotes(notes)}\n\n${wrapResume(resume)}` : wrapNotes(notes),
+          // Résumé mode parses the résumé alone (no notes). Other modes clean the
+          // notes, with the résumé appended as supporting data when present.
+          content:
+            selectedMode === 'resume'
+              ? wrapResume(resume)
+              : resume
+                ? `${wrapNotes(notes)}\n\n${wrapResume(resume)}`
+                : wrapNotes(notes),
         },
       ],
       ...(selectedMode === 'live'

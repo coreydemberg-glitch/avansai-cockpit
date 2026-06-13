@@ -26,6 +26,7 @@ import {
   setFunnelStage,
   closeActionItem,
   saveFeedback,
+  removeResume,
 } from './actions';
 import { C, STATUS, FONT, RADIUS, BORDER } from './funnel/tokens';
 import StageFunnel from './funnel/StageFunnel';
@@ -132,6 +133,14 @@ export default function CockpitBoard({
   // quadrant read them too, so a slider move stays in sync across both surfaces.
   const [rows, setRows] = useState<Candidate[]>(candidates);
   useEffect(() => setRows(candidates), [candidates]);
+  // Keep the open modal's candidate pointed at the freshest row after a
+  // router.refresh() (e.g. a résumé upload writes candidates.resume/email) so the
+  // modal + notes studio pick up the new résumé without a close-reopen. Matches
+  // by id; no-ops when nothing is open. setSelected doesn't touch `rows`, so this
+  // can't loop.
+  useEffect(() => {
+    setSelected((cur) => (cur ? rows.find((r) => r.id === cur.id) ?? cur : cur));
+  }, [rows]);
   const [, startArchiveTransition] = useTransition();
 
   const archiveCandidate = (c: Candidate, archived: boolean) => {
@@ -793,6 +802,29 @@ function CandidateModal({
     }
   };
 
+  // Remove the résumé from the candidate (Candidate Hub tweak #1): clears the DB
+  // column + deletes the stored file, then refreshes so the modal/studio drop it.
+  const [removingResume, setRemovingResume] = useState(false);
+  const handleRemoveResume = async () => {
+    if (removingResume) return;
+    if (!window.confirm('Remove this résumé from the candidate? This deletes the stored file.')) {
+      return;
+    }
+    setRemovingResume(true);
+    setResumeMsg(null);
+    try {
+      const res = await removeResume(candidate.id);
+      if (!res.ok) throw new Error(res.error || 'Remove failed');
+      setResumeUrl(null);
+      setResumeMsg('Removed ✓');
+      onChanged();
+    } catch (err) {
+      setResumeMsg(err instanceof Error ? err.message : 'Remove failed');
+    } finally {
+      setRemovingResume(false);
+    }
+  };
+
   // ── LinkedIn (unchanged) ──
   const [linkedin, setLinkedin] = useState(candidate.linkedin_url ?? '');
   const [savedLinkedin, setSavedLinkedin] = useState(candidate.linkedin_url ?? '');
@@ -1130,7 +1162,7 @@ function CandidateModal({
                 <span
                   style={{
                     ...styles.saveMsg,
-                    color: resumeMsg.startsWith('Uploaded') ? C.green : '#f87171',
+                    color: resumeMsg.includes('✓') ? C.green : '#f87171',
                   }}
                 >
                   {resumeMsg}
@@ -1142,9 +1174,21 @@ function CandidateModal({
                     <span style={styles.fieldValue}>
                       <i className="ti ti-file-cv" aria-hidden /> {resumeName}
                     </span>
-                    <a href={resumeUrl} target="_blank" rel="noreferrer" style={styles.link}>
-                      Open full ↗
-                    </a>
+                    <div style={styles.resumeHeadActions}>
+                      <a href={resumeUrl} target="_blank" rel="noreferrer" style={styles.link}>
+                        Open full ↗
+                      </a>
+                      <button
+                        type="button"
+                        style={styles.resumeRemoveBtn}
+                        onClick={handleRemoveResume}
+                        disabled={removingResume}
+                        title="Remove this résumé from the candidate"
+                      >
+                        <i className="ti ti-trash" aria-hidden />{' '}
+                        {removingResume ? 'Removing…' : 'Remove'}
+                      </button>
+                    </div>
                   </div>
                   {/* In-cockpit preview — same embed plumbing as the JD library. */}
                   {isResumeImage(resumeUrl) ? (
@@ -1696,6 +1740,20 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 10,
+  },
+  resumeHeadActions: { display: 'flex', alignItems: 'center', gap: 14 },
+  resumeRemoveBtn: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 4,
+    border: 'none',
+    background: 'transparent',
+    color: C.red,
+    cursor: 'pointer',
+    fontSize: 12.5,
+    fontWeight: 600,
+    fontFamily: 'inherit',
+    padding: 0,
   },
   resumePreviewFrame: {
     width: '100%',
