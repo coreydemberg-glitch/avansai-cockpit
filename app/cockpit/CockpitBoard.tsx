@@ -795,6 +795,12 @@ function CandidateModal({
         hits.push('name');
       }
       setResumeMsg(hits.length ? `Uploaded ✓ · parsed ${hits.join(' + ')}` : 'Uploaded ✓');
+      // Refresh so the new candidate.resume reaches the notes studio (via the
+      // rows→selected sync), which then parses the résumé into the raw notes —
+      // matching the drag-drop path. Without this the Résumé-tab upload would
+      // attach but never inject. Dedup (initialResumeUrl + per-URL + marker) keeps
+      // it to exactly one injection.
+      onChanged();
     } catch (err) {
       setResumeMsg(err instanceof Error ? err.message : 'Upload failed');
     } finally {
