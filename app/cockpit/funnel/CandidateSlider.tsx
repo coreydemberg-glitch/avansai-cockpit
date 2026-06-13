@@ -148,7 +148,10 @@ export default function CandidateRow({
             ...styles.readout,
             color: readoutColor,
             left: `${pct}%`,
-            transform: 'translateX(-50%)',
+            // Clamp the label inside the track: left-align near the start (so it
+            // can't spill back over the candidate's name), right-align near the
+            // end, centered in between. Fixes the name/readout overlap (#1).
+            transform: `translateX(${pct <= 12 ? '0%' : pct >= 88 ? '-100%' : '-50%'})`,
             textShadow: fillSolid ? '0 0 8px rgba(34,255,136,0.6)' : undefined,
           }}
         >
@@ -338,9 +341,9 @@ const styles: Record<string, React.CSSProperties> = {
   readout: {
     position: 'absolute',
     top: 0,
-    fontSize: 10,
+    fontSize: 8.5,
     fontWeight: 700,
-    letterSpacing: '0.08em',
+    letterSpacing: '0.06em',
     textTransform: 'uppercase',
     whiteSpace: 'nowrap',
     pointerEvents: 'none',
