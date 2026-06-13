@@ -608,6 +608,25 @@ function CandidateModal({
   // Set once the résumé parser fills the greeting, so template prefill defers to it.
   const emailFromResume = useRef(false);
 
+  // JD library with resolved public URLs, for the visual attachment picker (#6).
+  // Same source DocLibrary reads — the client has no SUPABASE_URL to build storage
+  // URLs, so /api/job-descriptions resolves them. Falls back silently to the
+  // `jobs` prop (titles only) if the fetch fails.
+  type JdDoc = { id: string; title: string; file_path: string; public_url: string };
+  const [jdDocs, setJdDocs] = useState<JdDoc[]>([]);
+  useEffect(() => {
+    let live = true;
+    fetch('/api/job-descriptions')
+      .then((r) => r.json())
+      .then((d) => {
+        if (live && d.ok && Array.isArray(d.jobs)) setJdDocs(d.jobs as JdDoc[]);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
+
   // Prefill the email panel once, based on the mode. follow-up/thankyou pull a DB
   // template (editable without code); prep falls back to a per-stage default if no
   // prep_<slug> template exists. Greeting/body [name] tokens are dropped (MVP).
@@ -686,7 +705,9 @@ function CandidateModal({
     setEmailMsg(null);
     setSending(true);
     try {
-      const job = jobs.find((j) => j.id === selectedJobId);
+      const job =
+        jdDocs.find((j) => j.id === selectedJobId) ??
+        jobs.find((j) => j.id === selectedJobId);
       const attachment = job
         ? { path: job.file_path, filename: `${job.title}.pdf` }
         : undefined;
@@ -1003,21 +1024,56 @@ function CandidateModal({
               />
               <label style={styles.label}>
                 {emailMode === 'thankyou'
-                  ? 'Attachment (TBD — pick if provided)'
-                  : 'Attach document'}
+                  ? 'Attachment (optional)'
+                  : 'Attach a job description'}
               </label>
-              <select
-                style={styles.input}
-                value={selectedJobId}
-                onChange={(e) => setSelectedJobId(e.target.value)}
-              >
-                <option value="">No attachment</option>
-                {jobs.map((j) => (
-                  <option key={j.id} value={j.id}>
-                    {j.title}
-                  </option>
-                ))}
-              </select>
+              {/* Visual JD picker (#6): same preview thumbnails as the JD library,
+                  half-size and reactive to the space — no dropdown. Click to pick;
+                  click again to clear. */}
+              <div style={styles.jdGrid}>
+                <button
+                  type="button"
+                  onClick={() => setSelectedJobId('')}
+                  style={{
+                    ...styles.jdNone,
+                    ...(selectedJobId === '' ? styles.jdTileActive : null),
+                  }}
+                  title="No attachment"
+                >
+                  <span style={styles.jdNoneMark}>
+                    <i className="ti ti-ban" aria-hidden />
+                  </span>
+                  <span style={styles.jdTitle}>No attachment</span>
+                </button>
+                {jdDocs.map((j) => {
+                  const selected = j.id === selectedJobId;
+                  return (
+                    <button
+                      key={j.id}
+                      type="button"
+                      onClick={() => setSelectedJobId(selected ? '' : j.id)}
+                      style={{ ...styles.jdTile, ...(selected ? styles.jdTileActive : null) }}
+                      title={j.title}
+                    >
+                      <div style={styles.jdPreviewBox}>
+                        <object
+                          data={`${j.public_url}#toolbar=0&navpanes=0&view=FitH`}
+                          type="application/pdf"
+                          style={styles.jdPreviewObject}
+                          aria-label={j.title}
+                        />
+                        <div style={styles.jdPreviewOverlay} />
+                        {selected && (
+                          <span style={styles.jdSelectedBadge} aria-hidden>
+                            <i className="ti ti-check" />
+                          </span>
+                        )}
+                      </div>
+                      <span style={styles.jdTitle}>{j.title}</span>
+                    </button>
+                  );
+                })}
+              </div>
               <div style={styles.saveRow}>
                 <button
                   style={sentOnce ? styles.sentBtn : styles.primaryBtn}
@@ -1529,6 +1585,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   tabBar: { display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 6, marginBottom: 18 },
   tab: {
+    position: 'relative',
     padding: '9px 6px',
     border: BORDER,
     borderRadius: 10,
@@ -1541,6 +1598,7 @@ const styles: Record<string, React.CSSProperties> = {
     textAlign: 'center',
   },
   tabActive: {
+    position: 'relative',
     padding: '9px 6px',
     border: `1px solid ${C.green}66`,
     borderRadius: 10,
@@ -1601,15 +1659,17 @@ const styles: Record<string, React.CSSProperties> = {
   },
   bullhornHint: { fontSize: 11.5, color: C.muted, lineHeight: 1.5, margin: '2px 0 8px' },
   // Green "on file" dot on a modal tab (résumé / LinkedIn / Bullhorn present).
+  // Absolutely pinned to the tab's top-right corner so it sits in the SAME spot
+  // on every tab and never nudges the centered label out of alignment (#7).
   tabDot: {
+    position: 'absolute',
+    top: 6,
+    right: 6,
     width: 6,
     height: 6,
     borderRadius: '50%',
     background: C.green,
     boxShadow: `0 0 6px ${C.green}`,
-    marginLeft: 5,
-    display: 'inline-block',
-    verticalAlign: 'middle',
   },
   resumePreviewWrap: { marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 },
   resumePreviewHead: {
@@ -1633,4 +1693,74 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: RADIUS.card,
     background: C.panel2,
   },
+
+  // Visual JD attachment picker (#6) — half-size of the JD library tiles,
+  // auto-fill so the grid stays reactive to the modal width.
+  jdGrid: {
+    marginTop: 6,
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(104px, 1fr))',
+    gap: 8,
+    maxHeight: 290,
+    overflowY: 'auto',
+    paddingRight: 2,
+  },
+  jdTile: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 6,
+    padding: 0,
+    border: BORDER,
+    borderRadius: RADIUS.card,
+    background: C.panel2,
+    cursor: 'pointer',
+    textAlign: 'left',
+    overflow: 'hidden',
+    fontFamily: 'inherit',
+  },
+  jdTileActive: {
+    border: `1px solid ${C.green}`,
+    boxShadow: `0 0 0 1px ${C.green}55`,
+  },
+  jdPreviewBox: { position: 'relative', height: 96, overflow: 'hidden', background: C.panel2 },
+  jdPreviewObject: { width: '100%', height: '100%', border: 'none', pointerEvents: 'none' },
+  jdPreviewOverlay: { position: 'absolute', inset: 0, background: 'transparent' },
+  jdSelectedBadge: {
+    position: 'absolute',
+    top: 4,
+    right: 4,
+    width: 18,
+    height: 18,
+    borderRadius: '50%',
+    background: C.green,
+    color: C.bg,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontSize: 11,
+    fontWeight: 800,
+  },
+  jdTitle: {
+    fontSize: 11,
+    color: C.white,
+    padding: '0 8px 8px',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  jdNone: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    height: 124,
+    border: `1.5px dashed ${C.line2}`,
+    borderRadius: RADIUS.card,
+    background: C.panel2,
+    color: C.muted,
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+  },
+  jdNoneMark: { fontSize: 22, color: C.muted },
 };

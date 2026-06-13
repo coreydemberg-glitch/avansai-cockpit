@@ -222,15 +222,17 @@ export async function POST(req: NextRequest) {
   const selectedMode: Mode =
     mode === 'feedback' ? 'feedback' : mode === 'live' ? 'live' : 'submittal';
 
-  // Optional résumé text (live mode only): seeds the field buckets the moment a
-  // résumé is dropped, before any notes are typed. Capped to keep each live
+  // Optional résumé text (submittal + live modes): the submittal cleaner bakes the
+  // résumé into the client email per its prompt ("pull facts from BOTH"); live
+  // seeds the field buckets the moment a résumé is dropped. Capped to keep each
   // re-clean small. Treated as untrusted DATA, exactly like the notes.
   const resume =
-    selectedMode === 'live' && typeof resumeText === 'string'
+    (selectedMode === 'submittal' || selectedMode === 'live') &&
+    typeof resumeText === 'string'
       ? resumeText.slice(0, 12000).trim()
       : '';
 
-  // Need something to work from: notes, or — in live mode — a résumé.
+  // Need something to work from: notes, or — when supported — a résumé.
   if (notes.trim().length === 0 && !resume) {
     return NextResponse.json(
       { error: 'Provide non-empty "notes" text (or a résumé) to clean.' },

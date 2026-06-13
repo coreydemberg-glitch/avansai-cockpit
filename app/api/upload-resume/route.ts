@@ -84,5 +84,25 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  return NextResponse.json({ url: publicUrl, filename: file.name, parsed, text });
+  // Auto-save the parsed email onto the candidate so the email composer is
+  // pre-filled without a copy-paste (Candidate Hub bug #5). Fill-if-empty only —
+  // never clobber an address the recruiter set or corrected by hand. Best-effort:
+  // a failure here leaves `emailSaved` false rather than failing the upload.
+  let emailSaved = false;
+  if (parsed.email) {
+    const { data: row } = await supabase
+      .from('candidates')
+      .select('email')
+      .eq('id', candidateId)
+      .maybeSingle();
+    if (!(row?.email ?? '').trim()) {
+      const { error: emailErr } = await supabase
+        .from('candidates')
+        .update({ email: parsed.email })
+        .eq('id', candidateId);
+      if (!emailErr) emailSaved = true;
+    }
+  }
+
+  return NextResponse.json({ url: publicUrl, filename: file.name, parsed, text, emailSaved });
 }

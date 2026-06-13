@@ -11,6 +11,17 @@ import { C, FONT, RADIUS, BORDER } from '../funnel/tokens';
 import { listCandidateTodos } from './actions';
 import { removeActionItem } from '../funnel/actionItemActions';
 
+// Trello cards are named "<Client> - <Person>" (e.g. "MaintainX - Fahad Karar"),
+// so the raw name truncates to "MaintainX …" in this narrow rail. Lead with the
+// person instead: strip a leading "<prefix> - " / "<prefix>- " / "<prefix>: "
+// segment (any of -, –, —, :, followed by whitespace). No separator → keep the
+// name as-is (#4).
+function personName(full: string): string {
+  const m = full.match(/^.+?\s*[-–—:]\s+(.+)$/);
+  const stripped = m ? m[1].trim() : '';
+  return stripped || full.trim();
+}
+
 export default function CandidatesTodoPanel({
   refreshKey,
   candidates,
@@ -70,7 +81,7 @@ export default function CandidatesTodoPanel({
       <div style={styles.head}>
         <span style={styles.title}>
           <span style={styles.mark} aria-hidden />
-          Candidates To-Do
+          Action Items
         </span>
         <span style={styles.count}>{items.length}</span>
       </div>
@@ -83,11 +94,12 @@ export default function CandidatesTodoPanel({
         ) : (
           <ul style={styles.list}>
             {items.map((it) => {
-              // Display just the candidate's name — the row's whole job is to be
-              // a fast jump-back. No "notes on file" suffix, no job title; the
-              // icons carry the actions (Corey's ask).
+              // Display just the person's name — the row's whole job is to be a
+              // fast jump-back. Strip the "<Client> - " prefix so it doesn't read
+              // "MaintainX …"; the icons carry the actions (Corey's ask).
               const cand = it.candidate_id ? candById.get(it.candidate_id) : null;
-              const label = cand?.name?.trim() || it.title || 'Candidate';
+              const raw = cand?.name?.trim();
+              const label = raw ? personName(raw) : it.title || 'Candidate';
               const openable = !!it.candidate_id;
               return (
                 <li key={it.id}>
