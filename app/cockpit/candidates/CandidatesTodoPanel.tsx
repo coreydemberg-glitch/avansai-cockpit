@@ -82,47 +82,66 @@ export default function CandidatesTodoPanel({
           </p>
         ) : (
           <ul style={styles.list}>
-            {items.map((it) => (
-              <li key={it.id}>
-                <div style={styles.row}>
-                  <span style={styles.text}>{it.title}</span>
-                  <div style={styles.rowActions}>
-                    <button
-                      type="button"
-                      style={styles.copyBtn}
-                      onClick={() => void copyNotes(it)}
-                      title="Copy cleaned notes to clipboard"
-                      aria-label="Copy cleaned notes"
-                    >
-                      <i
-                        className={`ti ${copiedId === it.id ? 'ti-check' : 'ti-copy'}`}
-                        style={copiedId === it.id ? { color: C.green } : undefined}
-                        aria-hidden
-                      />
-                    </button>
-                    {it.candidate_id && (
+            {items.map((it) => {
+              // Display just the candidate's name — the row's whole job is to be
+              // a fast jump-back. No "notes on file" suffix, no job title; the
+              // icons carry the actions (Corey's ask).
+              const cand = it.candidate_id ? candById.get(it.candidate_id) : null;
+              const label = cand?.name?.trim() || it.title || 'Candidate';
+              const openable = !!it.candidate_id;
+              return (
+                <li key={it.id}>
+                  <div
+                    style={{ ...styles.row, ...(openable ? styles.rowClickable : null) }}
+                    role={openable ? 'button' : undefined}
+                    tabIndex={openable ? 0 : undefined}
+                    title={openable ? 'Open candidate' : undefined}
+                    onClick={openable ? () => onOpenCandidate(it.candidate_id as string) : undefined}
+                    onKeyDown={
+                      openable
+                        ? (e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              onOpenCandidate(it.candidate_id as string);
+                            }
+                          }
+                        : undefined
+                    }
+                  >
+                    <span style={styles.text}>{label}</span>
+                    <div style={styles.rowActions}>
                       <button
                         type="button"
-                        style={styles.openBtn}
-                        onClick={() => onOpenCandidate(it.candidate_id as string)}
-                        title="Open candidate"
-                        aria-label="Open candidate"
+                        style={styles.copyBtn}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void copyNotes(it);
+                        }}
+                        title="Copy cleaned notes to clipboard"
+                        aria-label="Copy cleaned notes"
                       >
-                        <i className="ti ti-external-link" aria-hidden />
+                        <i
+                          className={`ti ${copiedId === it.id ? 'ti-check' : 'ti-copy'}`}
+                          style={copiedId === it.id ? { color: C.green } : undefined}
+                          aria-hidden
+                        />
                       </button>
-                    )}
-                    <button
-                      type="button"
-                      style={styles.removeBtn}
-                      onClick={() => void handleRemove(it.id)}
-                      aria-label="Remove to-do"
-                    >
-                      ✕
-                    </button>
+                      <button
+                        type="button"
+                        style={styles.removeBtn}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void handleRemove(it.id);
+                        }}
+                        aria-label="Remove to-do"
+                      >
+                        ✕
+                      </button>
+                    </div>
                   </div>
-                </div>
-              </li>
-            ))}
+                </li>
+              );
+            })}
           </ul>
         )}
       </div>
@@ -203,15 +222,19 @@ const styles: Record<string, React.CSSProperties> = {
     border: BORDER,
     borderRadius: RADIUS.card,
   },
-  // BOLD per §5 — heavier than the home manual rows (which sit at 600).
+  rowClickable: { cursor: 'pointer' },
+  // Minimal: just the candidate's name, quiet weight, single line with an
+  // ellipsis. The icons carry the actions; clicking the row opens the candidate.
   text: {
     flex: 1,
     minWidth: 0,
-    fontSize: 13,
-    fontWeight: 800,
+    fontSize: 12.5,
+    fontWeight: 600,
     color: C.white,
-    lineHeight: 1.35,
-    wordBreak: 'break-word',
+    lineHeight: 1.3,
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
   },
   rowActions: { display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 },
   copyBtn: {
@@ -225,23 +248,6 @@ const styles: Record<string, React.CSSProperties> = {
     color: C.green,
     background: `${C.green}14`,
     border: `1px solid ${C.green}40`,
-    borderRadius: 6,
-    cursor: 'pointer',
-    fontFamily: FONT,
-    lineHeight: 1,
-    padding: 0,
-  },
-  openBtn: {
-    flexShrink: 0,
-    width: 22,
-    height: 22,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    fontSize: 12,
-    color: C.muted,
-    background: C.panelHi,
-    border: BORDER,
     borderRadius: 6,
     cursor: 'pointer',
     fontFamily: FONT,

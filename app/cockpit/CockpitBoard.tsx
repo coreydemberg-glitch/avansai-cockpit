@@ -48,8 +48,16 @@ import CandidateNotesStudio from './candidates/CandidateNotesStudio';
 // when no bullhorn_id is linked yet (the card then signals "create a profile").
 const BULLHORN_BASE =
   'https://cls43.bullhornstaffing.com/BullhornStaffing/OpenWindow.cfm?Entity=Candidate&id=';
+// Bullhorn home — where the one-button bridge lands when no record id is linked
+// (recruiter pastes the copied summary into a new/searched candidate).
+const BULLHORN_HOME = 'https://cls43.bullhornstaffing.com/BullhornStaffing/';
 const bullhornUrl = (id: string | null | undefined) =>
   id && id.trim() ? `${BULLHORN_BASE}${encodeURIComponent(id.trim())}` : null;
+
+// Tell a résumé image apart from a PDF by its stored URL so the preview embeds
+// the right element. Defaults to the PDF embed for anything non-image.
+const isResumeImage = (url: string) =>
+  /\.(png|jpe?g|gif|webp|bmp|svg)(?:$|[?#])/i.test(url);
 
 // Which top-level section the cockpit is showing. In-page view switching (no
 // routing) — matches the codebase's existing local-state model and keeps the
@@ -796,6 +804,22 @@ function CandidateModal({
   };
   const bhUrl = bullhornUrl(savedBullhornId);
 
+  // Idiot-proof one-button bridge (no live API write): copy this candidate's
+  // cleaned summary to the clipboard, then open Bullhorn (their record if a id
+  // is linked, otherwise the Bullhorn home) in a new tab — paste and go.
+  const [bhCopied, setBhCopied] = useState(false);
+  const copyAndOpenBullhorn = async () => {
+    const summary = (candidate.notes_clean || candidate.notes || '').trim();
+    try {
+      if (summary) await navigator.clipboard.writeText(summary);
+      setBhCopied(true);
+      setTimeout(() => setBhCopied(false), 2000);
+    } catch {
+      /* clipboard blocked — still open Bullhorn below */
+    }
+    window.open(bhUrl || BULLHORN_HOME, '_blank', 'noopener,noreferrer');
+  };
+
   const resumeName = resumeUrl
     ? decodeURIComponent(resumeUrl.split('/').pop() || 'resume').replace(/^\d+-/, '')
     : null;
@@ -850,6 +874,12 @@ function CandidateModal({
               style={activeTab === t.key ? styles.tabActive : styles.tab}
             >
               <i className={`ti ${t.icon}`} aria-hidden /> {t.label}
+              {/* Green "on file" signal — lit when this tab has content saved. */}
+              {((t.key === 'resume' && resumeUrl) ||
+                (t.key === 'linkedin' && savedLinkedin) ||
+                (t.key === 'bullhorn' && savedBullhornId)) && (
+                <span style={styles.tabDot} aria-hidden />
+              )}
             </button>
           ))}
         </div>
@@ -860,6 +890,10 @@ function CandidateModal({
               candidate={candidate}
               onTodoRaised={onTodoRaised}
               onChanged={onChanged}
+              onResumeUploaded={(url) => {
+                setResumeUrl(url);
+                setResumeMsg('Uploaded ✓ from Notes');
+              }}
             />
           )}
 
@@ -1017,14 +1051,6 @@ function CandidateModal({
                 style={styles.input}
               />
               {uploading && <span style={styles.actionMsg}>Uploading…</span>}
-              {resumeUrl && (
-                <p style={styles.fieldValue}>
-                  📄{' '}
-                  <a href={resumeUrl} target="_blank" rel="noreferrer" style={styles.link}>
-                    {resumeName}
-                  </a>
-                </p>
-              )}
               {resumeMsg && (
                 <span
                   style={{
@@ -1034,6 +1060,36 @@ function CandidateModal({
                 >
                   {resumeMsg}
                 </span>
+              )}
+              {resumeUrl ? (
+                <div style={styles.resumePreviewWrap}>
+                  <div style={styles.resumePreviewHead}>
+                    <span style={styles.fieldValue}>
+                      <i className="ti ti-file-cv" aria-hidden /> {resumeName}
+                    </span>
+                    <a href={resumeUrl} target="_blank" rel="noreferrer" style={styles.link}>
+                      Open full ↗
+                    </a>
+                  </div>
+                  {/* In-cockpit preview — same embed plumbing as the JD library. */}
+                  {isResumeImage(resumeUrl) ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={resumeUrl} alt="Résumé preview" style={styles.resumePreviewImg} />
+                  ) : (
+                    <object
+                      data={`${resumeUrl}#toolbar=0&navpanes=0&view=FitH`}
+                      type="application/pdf"
+                      style={styles.resumePreviewFrame}
+                    >
+                      <iframe src={resumeUrl} style={styles.resumePreviewFrame} title="Résumé preview" />
+                    </object>
+                  )}
+                </div>
+              ) : (
+                <p style={styles.fieldValue}>
+                  No résumé on file yet — upload one above, or drop it onto the Notes tab to
+                  attach + parse it.
+                </p>
               )}
             </div>
           )}
@@ -1091,16 +1147,25 @@ function CandidateModal({
 
           {activeTab === 'bullhorn' && (
             <div style={styles.sectionCol}>
+              {/* The one-button bridge — works whether or not a record is linked. */}
+              <button style={styles.bullhornBtn} onClick={copyAndOpenBullhorn}>
+                <i className={`ti ${bhCopied ? 'ti-check' : 'ti-clipboard-copy'}`} aria-hidden />{' '}
+                {bhCopied
+                  ? 'Copied — opening Bullhorn…'
+                  : savedBullhornId
+                    ? 'Copy summary + open record'
+                    : 'Copy summary + open Bullhorn'}
+              </button>
+              <p style={styles.bullhornHint}>
+                Copies this candidate’s cleaned summary to your clipboard, then opens{' '}
+                {savedBullhornId ? 'their Bullhorn record' : 'Bullhorn'} in a new tab — paste
+                and go. No live API write; this is the one-button bridge.
+              </p>
+
               {bhUrl ? (
                 <>
-                  <a
-                    href={bhUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    style={styles.bullhornBtn}
-                  >
-                    <i className="ti ti-database" aria-hidden /> Open in Bullhorn
-                    <span aria-hidden> ↗</span>
+                  <a href={bhUrl} target="_blank" rel="noreferrer" style={styles.link}>
+                    Open record directly ↗
                   </a>
                   <p style={styles.fieldValue}>Linked record id: {savedBullhornId}</p>
                   <button style={styles.linkText} onClick={() => setSavedBullhornId('')}>
@@ -1109,13 +1174,9 @@ function CandidateModal({
                 </>
               ) : (
                 <>
-                  <div style={styles.bullhornWarn}>
-                    <i className="ti ti-alert-triangle" aria-hidden /> No Bullhorn
-                    profile linked. Auto-creation from Trello isn’t wired yet (the
-                    Bullhorn integration is read-only and has no live write
-                    credentials) — paste an existing record id to link it now.
-                  </div>
-                  <label style={styles.label}>Bullhorn record id</label>
+                  <label style={styles.label}>
+                    Link a record id (optional — enables a direct deep-link)
+                  </label>
                   <input
                     style={styles.input}
                     value={bullhornId}
@@ -1520,31 +1581,56 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: 'inherit',
     textDecoration: 'underline',
   },
-  // Bullhorn deep-link button (candidate-card §3). Brand-green like the cockpit.
+  // Bullhorn one-button bridge. Brand-green like the cockpit; works as a real
+  // <button> (border/cursor/font reset) since it now triggers copy+open.
   bullhornBtn: {
     display: 'inline-flex',
     alignItems: 'center',
     gap: 8,
     alignSelf: 'flex-start',
     padding: '9px 16px',
+    border: 'none',
     borderRadius: RADIUS.button,
     background: C.green,
     color: C.bg,
     textDecoration: 'none',
     fontSize: 13,
     fontWeight: 700,
+    fontFamily: 'inherit',
+    cursor: 'pointer',
   },
-  bullhornWarn: {
+  bullhornHint: { fontSize: 11.5, color: C.muted, lineHeight: 1.5, margin: '2px 0 8px' },
+  // Green "on file" dot on a modal tab (résumé / LinkedIn / Bullhorn present).
+  tabDot: {
+    width: 6,
+    height: 6,
+    borderRadius: '50%',
+    background: C.green,
+    boxShadow: `0 0 6px ${C.green}`,
+    marginLeft: 5,
+    display: 'inline-block',
+    verticalAlign: 'middle',
+  },
+  resumePreviewWrap: { marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 },
+  resumePreviewHead: {
     display: 'flex',
-    alignItems: 'flex-start',
-    gap: 8,
-    fontSize: 12.5,
-    lineHeight: 1.5,
-    color: C.amber,
-    background: `${C.amber}14`,
-    border: `1px solid ${C.amber}40`,
-    borderRadius: RADIUS.chip,
-    padding: '10px 12px',
-    marginBottom: 4,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  resumePreviewFrame: {
+    width: '100%',
+    height: 460,
+    border: BORDER,
+    borderRadius: RADIUS.card,
+    background: C.panel2,
+  },
+  resumePreviewImg: {
+    width: '100%',
+    maxHeight: 460,
+    objectFit: 'contain',
+    border: BORDER,
+    borderRadius: RADIUS.card,
+    background: C.panel2,
   },
 };

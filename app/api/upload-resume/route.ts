@@ -70,14 +70,19 @@ export async function POST(req: NextRequest) {
     email: null,
     firstName: null,
   };
+  // Full extracted résumé text (PDF only) so the notes studio can seed the live
+  // cleaner's field buckets straight from the résumé. Capped so the payload —
+  // and every live re-clean call that carries it — stays small.
+  let text = '';
   if (file.type === 'application/pdf') {
     try {
-      const text = await extractPdfText(bytes);
-      parsed = parseResumeContact(text);
+      const full = await extractPdfText(bytes);
+      parsed = parseResumeContact(full);
+      text = full.slice(0, 12000);
     } catch {
-      // leave parsed as nulls
+      // leave parsed as nulls / text empty
     }
   }
 
-  return NextResponse.json({ url: publicUrl, filename: file.name, parsed });
+  return NextResponse.json({ url: publicUrl, filename: file.name, parsed, text });
 }
